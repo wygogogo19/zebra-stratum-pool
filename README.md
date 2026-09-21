@@ -2,6 +2,7 @@
 
 **Non-custodial solo mining for Zcash, built on `zebrad` — the Rust node. No `zcashd`, no pool balance, no withdrawal step.**
 
+[![CI](https://github.com/wygogogo19/zebra-stratum-pool/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/wygogogo19/zebra-stratum-pool/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)](#requirements)
@@ -104,6 +105,10 @@ The engine writes `status_file` every couple of seconds. Fields worth knowing:
 > present.
 
 ## Testing
+
+CI runs on every push: every module is byte-compiled, imported and checked for the mode-2 coinbase
+path, the shipped config template is parsed, and the tracked sources are verified to be English-only
+(Python 3.11 / 3.12 / 3.13, standard library only, no install step).
 
 `pool_selftest_submit.py` connects to a running engine, subscribes, authorises and submits a share — useful to
 verify a relay/firewall path end to end:

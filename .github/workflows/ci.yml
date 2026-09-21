@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Syntax + import self-check (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # There is deliberately no `pip install` step: the engine must run on a bare
+      # CPython standard library, so any third-party import fails here on purpose.
+      - name: Byte-compile every module
+        run: python -m compileall -q -f .
+
+      - name: Import self-check
+        run: |
+          python - <<'PY'
+          import importlib
+          import json
+          import pathlib
+          import subprocess
+
+          # 1) every shipped module imports cleanly with the standard library only
+          for name in ("pool", "build_coinbase", "zcash_v6", "pool_selftest_submit"):
+              importlib.import_module(name)
+              print(f"[ok] import {name}")
+
+          pool = importlib.import_module("pool")
+
+          # 2) the non-custodial coinbase path must be present, not silently skipped
+          assert pool._MODE2_MODULES, "mode-2 coinbase modules failed to load"
+          assert callable(getattr(pool, "main", None)), "pool.main() entry point missing"
+          print("[ok] mode-2 coinbase modules loaded, pool.main() present")
+
+          # 3) shipped configuration template must stay valid JSON
+          cfg = json.loads(pathlib.Path("config.example.json").read_text(encoding="utf-8"))
+          assert isinstance(cfg, dict) and cfg, "config.example.json is empty"
+          print(f"[ok] config.example.json parses ({len(cfg)} top-level keys)")
+
+          # 4) release hygiene: tracked text files are English-only and carry no CJK
+          suffixes = {".py", ".md", ".json", ".yml", ".yaml", ".txt", ".service"}
+          tracked = subprocess.check_output(["git", "ls-files"], text=True).split()
+          bad = []
+          for name in tracked:
+              path = pathlib.Path(name)
+              if path.suffix not in suffixes or not path.is_file():
+                  continue
+              text = path.read_text(encoding="utf-8")
+              if any("\u4e00" <= ch <= "\u9fff" for ch in text):
+                  bad.append(name)
+          assert not bad, f"CJK text found in tracked files: {bad}"
+          print(f"[ok] {len(tracked)} tracked files scanned, no CJK found")
+          PY

@@ -1,0 +1,21 @@
+# Example systemd unit for the pool engine.
+# Adjust paths, user and config location, then: systemctl daemon-reload && systemctl enable --now zebra-stratum-pool
+[Unit]
+Description=Zebra Stratum Pool — non-custodial solo mining on zebrad
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zecpool
+WorkingDirectory=/opt/zebra-stratum-pool
+ExecStart=/usr/bin/python3 /opt/zebra-stratum-pool/pool.py /etc/zebra-stratum-pool/config.json
+Restart=always
+RestartSec=5
+
+# The engine only needs to reach the local zebrad RPC; it never holds keys or funds.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

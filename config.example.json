@@ -1,0 +1,44 @@
+{
+  "_readme": "Copy to config.json and edit. Only pool_fee_address (and status_push_token, if you use a dashboard) are sensitive — never commit your real config.json.",
+
+  "listen_host": "127.0.0.1",
+  "listen_port": 3132,
+  "template_poll_seconds": 5,
+  "default_difficulty": 512,
+  "log_level": "info",
+  "status_file": "/var/lib/zebra-stratum-pool/status.json",
+
+  "_status_push_readme": "Optional: POST the live status snapshot to an external dashboard. Leave empty to disable.",
+  "status_push_url": "",
+  "status_push_token": "",
+
+  "vardiff": {
+    "enabled": true,
+    "min_difficulty": 16,
+    "max_difficulty": 131072,
+    "shares_per_min_min": 8,
+    "shares_per_min_max": 15,
+    "interval_seconds": 30,
+    "grace_seconds": 45,
+    "warmup_seconds": 45,
+    "_fixed_worker_prefixes_readme": "Workers with these prefixes keep a fixed difficulty (handy for pool-internal test rigs).",
+    "fixed_worker_prefixes": ["local."]
+  },
+
+  "mode2": {
+    "_readme": "Non-custodial payout: the coinbase transaction itself pays the miner. 99% goes to the address embedded in the worker name, 1% (fee_pct) to pool_fee_address. Requires zebrad mining.getblocktemplate with coinbase/value-pool support.",
+    "enabled": true,
+    "pool_fee_address": "t1REPLACE_WITH_YOUR_POOL_FEE_T_ADDRESS",
+    "fee_pct": 1.0,
+    "_whitelist_prefixes_readme": "Worker names starting with these prefixes bypass mode 2 (used by pool-internal test rigs). Remove entries you do not need.",
+    "whitelist_prefixes": ["local."]
+  },
+
+  "zebra": {
+    "_readme": "zebrad JSON-RPC. Prefer cookie_file, or leave user/password empty when using it.",
+    "url": "http://127.0.0.1:8232/",
+    "cookie_file": "",
+    "user": "",
+    "password": ""
+  }
+}

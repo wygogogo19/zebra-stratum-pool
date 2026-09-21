@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.bak*
+
+# never commit a real deployment config or its runtime state
+config.json
+counters.json
+status.json
+status_pushed.json
+worker_difficulty.json
+*.log

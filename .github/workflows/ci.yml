@@ -91,4 +91,10 @@ jobs:
           assert classify(_Stub(), "local.rig1") is True, "local. prefix not detected"
           assert classify(_Stub(), "t1RealMinerAddress.rig7") is False, "real miner misclassified"
           print("[ok] internal test rigs are classified out of public counters")
+
+          # 7) the public view (worker list / sessions / online count) must keep that filter too
+          for marker in ("internal_sessions", '"shares_1m": len(recent)'):
+              assert marker in engine_src, f"public-view filtering marker missing: {marker!r}"
+          assert engine_src.count("_is_internal_worker") >= 4, "filter not wired into every public surface"
+          print("[ok] public worker list / sessions / online count are filtered")
           PY

@@ -100,6 +100,11 @@ The engine writes `status_file` every couple of seconds. Fields worth knowing:
 | `connections_open` | Raw open sockets, including probes that never authorised (diagnostics only) |
 | `shares_total` / `shares_rejected` | Cumulative counters; the engine also persists them to `counters.json` so restarts do not reset the public numbers |
 | `internal_accepted` / `internal_rejected` | Shares from workers listed in `internal_worker_prefixes` — counted here instead of the public counters, so a loopback test rig never inflates or pollutes what visitors see |
+| `internal_sessions` | How many connected sessions were classified as internal and therefore left out of `sessions`, `worker_list`, `hashrate` and `workers_online` |
+
+With `internal_worker_prefixes` set, the public surface describes external miners only: `hashrate`,
+`shares_1m`, `worker_list`, `sessions` and `workers_online` all skip the operator's own rigs, so a
+quiet pool honestly reports **0 workers online** instead of showing a test rig to visitors.
 | `hashrate` | Rolling estimate from accepted shares |
 | `worker_list` | Per-worker shares, difficulty and last-share age (only workers with accepted shares appear) |
 | `sessions` | Live and recently closed sessions, with `worker`, `state`, `accepted`, `rejected` |

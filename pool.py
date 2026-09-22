@@ -589,10 +589,13 @@ class PoolServer:
         client.accepted += 1
         client.last_activity = time.time()
         self._count_share(client, True)
-        self.share_events.append((time.time(), client.worker or "unknown", effective))
         client.share_times.append(time.time())
-        self.worker_total[client.worker or "unknown"] = self.worker_total.get(client.worker or "unknown", 0) + 1
-        self.worker_last[client.worker or "unknown"] = time.time()
+        # internal test rigs stay out of the public view (rolling hashrate + worker list)
+        if not self._is_internal_worker(client.worker):
+            self.share_events.append((time.time(), client.worker or "unknown", effective))
+            self.worker_total[client.worker or "unknown"] = (
+                self.worker_total.get(client.worker or "unknown", 0) + 1)
+            self.worker_last[client.worker or "unknown"] = time.time()
         await client.send({"id": mid, "result": True, "error": None})
         await self._maybe_vardiff(client)
 
@@ -923,7 +926,11 @@ class PoolServer:
             })
         job = self.jobs.current
         sessions = []
+        internal_sessions = 0
         for c in self.clients:
+            if self._is_internal_worker(c.worker):
+                internal_sessions += 1
+                continue
             sessions.append({
                 "worker": c.worker or "(unauthorized)",
                 "extranonce1": c.extranonce1,
@@ -950,12 +957,15 @@ class PoolServer:
             "txs": len(job.template_txs) if job else 0,
             "uptime_seconds": round(now - self.started_at, 1),
             "hashrate": round(hashrate, 2),
-            "workers_online": sum(1 for c in self.clients if getattr(c, "authorized", False)),
+            "workers_online": sum(
+                1 for c in self.clients
+                if getattr(c, "authorized", False) and not self._is_internal_worker(c.worker)),
             "connections_open": len(self.clients),
             "shares_total": self.shares_total,
             "shares_rejected": self.shares_rejected,
             "internal_accepted": self.internal_accepted,
             "internal_rejected": self.internal_rejected,
+            "internal_sessions": internal_sessions,
             "valid_rate": (
                 round(self.shares_total / (self.shares_total + self.shares_rejected), 4)
                 if (self.shares_total + self.shares_rejected) > 0

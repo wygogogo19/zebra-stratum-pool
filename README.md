@@ -83,6 +83,7 @@ See [`config.example.json`](./config.example.json). The important fields:
 | `zebra.url` | `zebrad` JSON-RPC endpoint, e.g. `http://127.0.0.1:8232/` |
 | `status_file` | Where the live status snapshot is written (JSON, polled by dashboards) |
 | `status_push_url` / `status_push_token` | Optional: POST the snapshot to an external dashboard |
+| `internal_worker_prefixes` | Worker names that belong to your own test rigs (`["local.", "cpurig"]`). Matched against the whole worker string or the label after the last dot; their shares stay out of the public counters |
 
 ### Running under systemd
 
@@ -97,6 +98,7 @@ The engine writes `status_file` every couple of seconds. Fields worth knowing:
 | `workers_online` | Sessions that completed `mining.authorize` successfully — **a bare TCP connection does not count** |
 | `connections_open` | Raw open sockets, including probes that never authorised (diagnostics only) |
 | `shares_total` / `shares_rejected` | Cumulative counters; the engine also persists them to `counters.json` so restarts do not reset the public numbers |
+| `internal_accepted` / `internal_rejected` | Shares from workers listed in `internal_worker_prefixes` — counted here instead of the public counters, so a loopback test rig never inflates or pollutes what visitors see |
 | `hashrate` | Rolling estimate from accepted shares |
 | `worker_list` | Per-worker shares, difficulty and last-share age (only workers with accepted shares appear) |
 | `sessions` | Live and recently closed sessions, with `worker`, `state`, `accepted`, `rejected` |

@@ -74,4 +74,21 @@ jobs:
                   bad.append(name)
           assert not bad, f"CJK text found in tracked files: {bad}"
           print(f"[ok] {len(tracked)} tracked files scanned, no CJK found")
+
+          # 5) deployment guard: the share-counter persistence trio must survive every build,
+          #    otherwise a restart silently resets the public numbers a dashboard reports.
+          engine_src = pathlib.Path("pool.py").read_text(encoding="utf-8")
+          for marker in ("counter_file", "_persist_counters", "restored share counters"):
+              assert marker in engine_src, f"counter persistence lost from pool.py: {marker!r}"
+          print("[ok] share-counter persistence present in pool.py")
+
+          # 6) our own test rigs must stay out of the public counters
+          class _Stub:
+              internal_prefixes = ("local.", "u1", "cpurig")
+
+          classify = pool.PoolServer._is_internal_worker
+          assert classify(_Stub(), "t1ExampleAddress.cpurig") is True, "labelled test rig not detected"
+          assert classify(_Stub(), "local.rig1") is True, "local. prefix not detected"
+          assert classify(_Stub(), "t1RealMinerAddress.rig7") is False, "real miner misclassified"
+          print("[ok] internal test rigs are classified out of public counters")
           PY

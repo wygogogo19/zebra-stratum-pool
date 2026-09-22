@@ -12,6 +12,9 @@
   "status_push_url": "",
   "status_push_token": "",
 
+  "_internal_worker_prefixes_readme": "Optional: worker prefixes/labels belonging to your own test rigs. Their shares are excluded from the public shares_total / shares_rejected and counted separately as internal_accepted / internal_rejected. Matches the whole worker string or the label after the last dot. Leave [] to count everything.",
+  "internal_worker_prefixes": [],
+
   "vardiff": {
     "enabled": true,
     "min_difficulty": 16,

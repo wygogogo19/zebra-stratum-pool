@@ -396,6 +396,13 @@ class PoolServer:
                      self.shares_total, self.shares_rejected)
         except Exception:  # noqa: BLE001
             pass
+        # ---- public counters describe external miners only ----
+        # Our own test rigs (loopback CPU probes, whitelabel rigs) must never move the numbers a
+        # visitor compares against our claims; they are counted separately for diagnostics.
+        self.internal_prefixes = tuple(
+            str(p).strip().lower() for p in cfg.get("internal_worker_prefixes", []) if str(p).strip())
+        self.internal_accepted = 0
+        self.internal_rejected = 0
         self.reject_reasons: dict[str, int] = {}
         self.recent_sessions: list[dict[str, Any]] = []   # recently closed sessions, for troubleshooting
 
@@ -526,8 +533,8 @@ class PoolServer:
         job = client.mode2_job or self.jobs.current
         if not job or len(params) < 5:
             client.rejected += 1
-            self.shares_rejected += 1
-            self._bump_reason("bad_params")
+            self._count_share(client, False)
+            self._bump_reason("bad_params", client)
             await client.send({"id": mid, "result": False, "error": [20, "bad params", None]})
             return
         _, job_id, ntime, nonce, solution = params[0], params[1], params[2], params[3], params[4]
@@ -541,8 +548,8 @@ class PoolServer:
                 job = client.mode2_prev_job
             else:
                 client.rejected += 1
-                self.shares_rejected += 1
-                self._bump_reason("stale_job")
+                self._count_share(client, False)
+                self._bump_reason("stale_job", client)
                 await client.send({"id": mid, "result": False, "error": [21, "stale job", None]})
                 return
 
@@ -554,8 +561,8 @@ class PoolServer:
         except Exception as exc:
             log.warning("failed to build header: %s", exc)
             client.rejected += 1
-            self.shares_rejected += 1
-            self._bump_reason("bad_share")
+            self._count_share(client, False)
+            self._bump_reason("bad_share", client)
             await client.send({"id": mid, "result": False, "error": [20, "bad share", None]})
             return
 
@@ -564,8 +571,8 @@ class PoolServer:
         effective = self._accept_difficulty(client)
         if not hash_meets_target(header_hash, target_from_difficulty(effective)):
             client.rejected += 1
-            self.shares_rejected += 1
-            self._bump_reason("low_difficulty")
+            self._count_share(client, False)
+            self._bump_reason("low_difficulty", client)
             client.low_diff_times.append(time.time())
             log.warning(
                 "DIAG low_difficulty worker=%s mode2=%s job_sub=%s job_cur=%s ntime=%s nonce=%s "
@@ -581,7 +588,7 @@ class PoolServer:
         client.shares += 1
         client.accepted += 1
         client.last_activity = time.time()
-        self.shares_total += 1
+        self._count_share(client, True)
         self.share_events.append((time.time(), client.worker or "unknown", effective))
         client.share_times.append(time.time())
         self.worker_total[client.worker or "unknown"] = self.worker_total.get(client.worker or "unknown", 0) + 1
@@ -842,7 +849,34 @@ class PoolServer:
         log.info("vardiff worker=%s difficulty %.0f → %.0f (%s, grace %.0fs)",
                  client.worker or "?", old, new, reason, self.vardiff_grace)
 
-    def _bump_reason(self, reason: str) -> None:
+    def _is_internal_worker(self, worker: str) -> bool:
+        """True for our own test rigs, which must not shape the public statistics.
+
+        Matches either the whole worker string (`local.rig1`, `u1abc…`) or the label after the last
+        dot (`t1abc….cpurig`), case-insensitively. Empty list → nothing is internal.
+        """
+        w = (worker or "").strip().lower()
+        if not w or not self.internal_prefixes:
+            return False
+        label = w.rsplit(".", 1)[-1]
+        return any(w.startswith(p) or label.startswith(p) for p in self.internal_prefixes)
+
+    def _count_share(self, client: "Client", accepted: bool) -> None:
+        """Public counters track external miners; internal rigs are counted separately."""
+        if self._is_internal_worker(client.worker):
+            if accepted:
+                self.internal_accepted += 1
+            else:
+                self.internal_rejected += 1
+            return
+        if accepted:
+            self.shares_total += 1
+        else:
+            self.shares_rejected += 1
+
+    def _bump_reason(self, reason: str, client: "Client | None" = None) -> None:
+        if client is not None and self._is_internal_worker(client.worker):
+            return
         self.reject_reasons[reason] = self.reject_reasons.get(reason, 0) + 1
 
     def _persist_counters(self) -> None:
@@ -920,6 +954,8 @@ class PoolServer:
             "connections_open": len(self.clients),
             "shares_total": self.shares_total,
             "shares_rejected": self.shares_rejected,
+            "internal_accepted": self.internal_accepted,
+            "internal_rejected": self.internal_rejected,
             "valid_rate": (
                 round(self.shares_total / (self.shares_total + self.shares_rejected), 4)
                 if (self.shares_total + self.shares_rejected) > 0

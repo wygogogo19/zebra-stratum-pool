@@ -21,7 +21,7 @@ The pool never holds a balance, never takes custody, and there is nothing to wit
 
 This is the engine that serves **`stratum+tcp://zec.robotbase.cc:3032`** in production.
 
-- Share accounting to date: **2,600+ accepted / 8 rejected (99.7% valid)** at share difficulty 512, with vardiff
+- Share accounting to date: **2,700+ accepted / 8 rejected (99.7% valid)** at share difficulty 512, with vardiff
   enabled — cumulative, restored across engine restarts, and visible live on the pool portal. Only external
   miners are counted; shares from the operator's own test rigs are reported separately (`internal_*`)
 - No Zcash block has been found by this pool yet — the numbers above are share-level, and the true-custody test is the coinbase split itself

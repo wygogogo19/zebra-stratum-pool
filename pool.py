@@ -65,6 +65,37 @@ MAX_TARGET = (1 << 256) - 1
 
 log = logging.getLogger("zecpool")
 
+EQUIHASH_SOLUTION_HEX = 2688      # Equihash(200,9) solution = 1344 bytes = 2688 hex chars
+
+
+def pick_solution(params: list[Any]) -> Any:
+    """Return the actual solution from the tail of a `mining.submit`, chosen by length.
+
+    Most Zcash firmwares submit `[worker, job_id, ntime, nonce, solution]` (5 params), but
+    BTC-style clients insert an extranonce2 and send
+    `[worker, job_id, ntime, nonce, extranonce2, solution]` (6 params). Taking `params[4]`
+    unconditionally then treats the extranonce2 as the solution and the share is thrown away as a
+    bad share. Some firmwares also include the CompactSize length prefix (`fd4005`) inside the
+    submitted solution, i.e. 2694 hex chars.
+
+    So: use the longest valid-hex string that is at least 2688 chars long. If nothing matches, fall
+    back to the last parameter and let header construction / validation decide — that keeps the
+    previous behaviour rather than adding a new rejection path.
+    """
+    best: Any = None
+    for item in params:
+        if not isinstance(item, str) or len(item) < EQUIHASH_SOLUTION_HEX or len(item) % 2:
+            continue
+        try:
+            bytes.fromhex(item)
+        except ValueError:
+            continue
+        if best is None or len(item) > len(best):
+            best = item
+    if best is not None:
+        return best
+    return params[-1] if params else ""
+
 
 class ZebraRPC:
     """zebrad JSON-RPC client (cookie file, or user/password)."""
@@ -537,7 +568,11 @@ class PoolServer:
             self._bump_reason("bad_params", client)
             await client.send({"id": mid, "result": False, "error": [20, "bad params", None]})
             return
-        _, job_id, ntime, nonce, solution = params[0], params[1], params[2], params[3], params[4]
+        _, job_id, ntime, nonce = params[0], params[1], params[2], params[3]
+        solution = pick_solution(params[4:])
+        if len(params) > 5:
+            # Compatibility telemetry: someone sent an extra parameter (extranonce2-style submit).
+            log.info("submit shape: %d params worker=%s", len(params), client.worker)
         if job_id != job.job_id:
             # Right after a broadcast, miners are usually still submitting against the previous job:
             # validate with that job's fields, otherwise those shares would be mislabelled stale.

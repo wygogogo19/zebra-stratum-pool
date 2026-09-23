@@ -4,7 +4,8 @@
   "listen_host": "127.0.0.1",
   "listen_port": 3132,
   "template_poll_seconds": 5,
-  "default_difficulty": 512,
+  "_default_difficulty_readme": "Starting share difficulty for a new session. 128 lets slow CPU/GPU rigs start producing shares quickly; vardiff doubles it toward the 8-15 shares/minute window within a minute or two for ASICs.",
+  "default_difficulty": 128,
   "log_level": "info",
   "status_file": "/var/lib/zebra-stratum-pool/status.json",
 

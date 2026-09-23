@@ -76,7 +76,7 @@ See [`config.example.json`](./config.example.json). The important fields:
 | --- | --- |
 | `listen_host` / `listen_port` | Where the Stratum listener binds (default `127.0.0.1:3132`) |
 | `template_poll_seconds` | How often `getblocktemplate` is refreshed (`5`) |
-| `default_difficulty` | Starting share difficulty before vardiff adapts (`512`) |
+| `default_difficulty` | Starting share difficulty before vardiff adapts (`128`). Low enough that CPU/GPU rigs produce shares immediately, while vardiff walks ASICs up to the 8–15 shares/minute window within a minute or two | 
 | `vardiff.*` | Difficulty bounds and the target shares-per-minute window (8–15/min by default) |
 | `mode2.enabled` | Turn the non-custodial coinbase split on/off |
 | `mode2.pool_fee_address` | Your `t1…`/`t3…` fee address (required when mode 2 is on) |
@@ -112,6 +112,19 @@ quiet pool honestly reports **0 workers online** instead of showing a test rig t
 > Counting only authorised sessions as "online miners" is deliberate: internet-exposed mining ports are
 > scanned constantly, and a scanner that opens a socket should never make a dashboard claim a miner is
 > present.
+
+### Firmware compatibility
+
+Share submission is accepted in both common shapes. The solution is picked by length — an
+Equihash (200,9) solution is 2688 hex chars, or 2694 when the firmware includes the CompactSize length
+prefix — so a 6-parameter submit that carries an `extranonce2` is not mistaken for a bad share. A
+28-byte nonce (Antminer-style, completed with the session's `extranonce1`) and a full 32-byte nonce
+are both accepted.
+
+What the engine does **not** do today is advertise a non-zero `extranonce2_size`: the mode-2 coinbase
+is assembled per miner, so the coinbase is fixed for the life of a job and the search space comes
+from the 32-byte nonce plus `ntime`. A firmware that insists on rolling its own `extranonce2` would
+submit shares against a coinbase the pool does not know about.
 
 ## Testing
 

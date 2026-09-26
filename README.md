@@ -21,7 +21,7 @@ The pool never holds a balance, never takes custody, and there is nothing to wit
 
 This is the engine that serves **`stratum+tcp://zec.robotbase.cc:3032`** in production.
 
-- Share accounting to date: **8,000+ accepted / 19 rejected (99.7% valid)** with vardiff enabled — cumulative,
+- Share accounting to date: **11,000+ accepted / 19 rejected (99.8% valid)** with vardiff enabled — cumulative,
   restored across engine restarts, and visible live on the pool portal. New sessions start at difficulty 128 and
   vardiff walks them to the target share rate. The figure includes the pool's own CPU probe and one rented Z15
   used for firmware-compatibility testing on 2026-09-22; workers matching `internal_worker_prefixes` are excluded

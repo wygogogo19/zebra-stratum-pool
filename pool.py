@@ -1,33 +1,27 @@
 #!/usr/bin/env python3
 """
-ZEC Solo Stratum V1 pool engine (non-custodial) — RobotBase
+ZEC Solo Stratum V1 bridge (non-custodial) - RobotBase
 
 Design principles
------------------
-1. The pool holds no coins, keeps no payout ledger and moves no funds of its own: zebrad
-   supplies the block template, and the coinbase transaction itself pays the miner.
-2. Payouts are non-custodial. In mode 2 each miner's own `t`-address is baked into the coinbase
-   the pool hands out — 99% to the miner, 1% to the pool's fee address — so there is nothing to
-   withdraw. A worker name that is not a valid address is refused at `mining.authorize`: the pool
-   will not mine for an account it cannot pay.
-3. Share validation checks the block-header double-SHA256 against the share target. The Equihash
-   solution is validated by zebrad at `submitblock` time under consensus rules.
-4. **zebrad's coinbase is never edited in place.** The template's `coinbasetxn` is bound to its
-   `blockcommitmentshash`, so injecting an extraNonce would break the commitment and produce an
-   invalid block. The engine therefore either
-     (a) reuses zebrad's coinbase byte-for-byte — `coinb1 = whole coinbase`, `coinb2 = ""`,
-         `extranonce2_size = 0` — relying on Zcash's 32-byte nonce (2^256) plus ntime for search
-         space, or
-     (b) builds its own coinbase for mode 2 and recomputes the commitment roots from scratch
-         (see `build_coinbase.py` and `zcash_v6.py`).
-   Firmware that insists on a non-zero extranonce2 needs path (b), which mode 2 already implements.
-
-Zcash block header (post-NU5, 140 bytes)
+--------
+1. The pool holds no funds, keeps no ledger and makes no payouts: the coinbase is assembled by Zebra from
+   the node-level [mining] miner_address; the pool only forwards that template to miners, and submits the
+block back to Zebra when a share meets the network target.
+   2. Every miner therefore shares one miner_address (private-pool semantics). Per-miner accounting would
+need a rewritten coinbase, which this implementation deliberately does not do.
+   3. Share validation only checks that the block header's double-SHA256 is at or below the share target;
+the Equihash solution is left to Zebra, which enforces consensus rules at submitblock time (acceptable
+for a private pool mining with its own hashrate).
+   4. **The coinbase Zebra provides is never modified**: the template's `coinbasetxn` was assembled by Zebra
+   from the node-level `miner_address`, and the header's `blockcommitmentshash` is bound to it; changing the
+   coinbase (for example to insert an extraNonce) breaks that commitment and the block would be rejected.
+   This implementation therefore uses `coinb1 = the whole coinbase`, `coinb2 = empty`, `extranonce2_size = 0`
+   and relies on Zcash's 32-byte nonce (2^256, plenty) plus ntime for the search space. Firmware that insists
+on a non-zero extranonce2 needs the full 'insert and recompute the commitments' path.
+Zcash block header (140 bytes since NU5)
     version(4, LE) | prevhash(32) | merkleroot(32) | blockcommitments(32)
     | time(4, LE) | bits(4, LE) | nonce(32)
-
-The Equihash solution (1344 B) is not part of the header: it is a separate, length-prefixed field
-inside the block. The header hash is the PoW hash.
+Note: the solution (1344 B) is not inside the header - it is a separate block field; the header hash is the PoW hash.
 """
 
 from __future__ import annotations
@@ -42,11 +36,11 @@ import socket
 import struct
 import time
 import urllib.request
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-# mode-2 (on-chain split) coinbase/digest helpers; if missing, the engine falls back to
-# zebrad's node-level coinbase only
+# Mode 2 (on-chain dynamic split) coinbase / v6 digest modules; when missing we fall back to Zebra's own coinbase
 try:
     import build_coinbase
     import zcash_v6 as zv
@@ -56,7 +50,7 @@ except Exception:  # noqa: BLE001
     zv = None                  # type: ignore[assignment]
     _MODE2_MODULES = False
 
-# Equihash 200,9 difficulty-1 target (matches the Miningcore zcash definition)
+# Equihash 200,9 difficulty-1 target (matches Miningcore's Zcash definition)
 # Share difficulty 1 == 2^13 = 8192 hashes (the Zcash pool convention, and the same
 # constant HASHRATE_FACTOR uses). The previous 0x0007ffff… = 2^251 made difficulty 1
 # only 32 hashes, i.e. 256x off — a real ASIC's shares were then 256x "too easy".
@@ -65,22 +59,25 @@ MAX_TARGET = (1 << 256) - 1
 
 log = logging.getLogger("zecpool")
 
+
+# Internal test rigs of this pool (loopback CPU rig, whitelabel rigs, dev probes). These labels
+# are always treated as internal, even if a deploy script later rewrites config.json without
+# them: otherwise the pool's own miner leaks back into the public counters and the worker list.
+INTERNAL_WORKER_LABELS = ("local.", "u1")
+
+
 EQUIHASH_SOLUTION_HEX = 2688      # Equihash(200,9) solution = 1344 bytes = 2688 hex chars
 
 
 def pick_solution(params: list[Any]) -> Any:
-    """Return the actual solution from the tail of a `mining.submit`, chosen by length.
+    """Pick the real solution out of the mining.submit params (by length, no manual configuration).
 
-    Most Zcash firmwares submit `[worker, job_id, ntime, nonce, solution]` (5 params), but
-    BTC-style clients insert an extranonce2 and send
-    `[worker, job_id, ntime, nonce, extranonce2, solution]` (6 params). Taking `params[4]`
-    unconditionally then treats the extranonce2 as the solution and the share is thrown away as a
-    bad share. Some firmwares also include the CompactSize length prefix (`fd4005`) inside the
-    submitted solution, i.e. 2694 hex chars.
+    * Most Zcash firmware: [worker, job_id, ntime, nonce, solution] (5 params)
+    * BTC-style clients: [worker, job_id, ntime, nonce, extranonce2, solution] (6 params)
+    * Some firmware counts the CompactSize length prefix (fd4005) as part of the solution (2694 hex chars)
 
-    So: use the longest valid-hex string that is at least 2688 chars long. If nothing matches, fall
-    back to the last parameter and let header construction / validation decide — that keeps the
-    previous behaviour rather than adding a new rejection path.
+    So take the longest valid-hex string of length >= 2688 as the solution; if none is found fall back to the
+    last parameter and let the header construction / validation decide (keeps the old behaviour, adds no new reject path).
     """
     best: Any = None
     for item in params:
@@ -98,7 +95,7 @@ def pick_solution(params: list[Any]) -> Any:
 
 
 class ZebraRPC:
-    """zebrad JSON-RPC client (cookie file, or user/password)."""
+    """Zebra JSON-RPC client (cookie file, or user/password auth)."""
 
     def __init__(self, cfg: dict[str, Any]) -> None:
         self.url = cfg["url"]
@@ -154,18 +151,59 @@ def merkle_root(coinbase_hash: bytes, branch: list[bytes]) -> bytes:
 
 
 def hex2bytes_reversed(h: str) -> bytes:
-    """Display-order (big-endian) hex → header byte order (reverse the 32 bytes)."""
+    """Display-order (big-endian) hex -> header internal byte order (32-byte reversal)."""
     return bytes.fromhex(h)[::-1]
 
 
 def swab32(h: str) -> str:
-    """Swap 4-byte words (the internal order ASIC firmware usually expects)."""
+    """Byte-swap in 4-byte words (the internal order miner firmware normally uses)."""
     raw = bytes.fromhex(h)
     out = bytearray()
     for i in range(0, len(raw), 4):
         out += raw[i : i + 4][::-1]
     return out.hex()
 
+
+def coinbase_output_sum(raw: bytes) -> int:
+    """Decode the total transparent output value from raw coinbase bytes.
+
+    Background (2026-09-23): Zebra's getblocktemplate does NOT return coinbasevalue (it only returns
+    coinbasetxn), and older code read tpl["coinbasevalue"] directly -> always 0, so the job log kept
+    printing "coinbase=0.00000000 ZEC", which reads like "the block pays nothing". This parses the Zcash
+    v4/v5 transaction format and sums every transparent output (= block subsidy + fees).
+
+    Layout: version(4, LE) [v4+: versionGroupId(4)] [v5+: branchId(4) + lockTime(4) + expiryHeight(4)]
+          → inputsCount(varint) → inputs(prevout36 + scriptLen(varint) + script + sequence4)
+          → outputsCount(varint) → outputs(value8 LE + scriptLen(varint) + script) …
+    """
+    try:
+        b = raw
+        ver = int.from_bytes(b[0:4], "little")
+        off = 4
+        if ver & 0x80000000:                    # overwintered (v4 and later)
+            off += 4                            # versionGroupId
+            if (ver & 0x7FFFFFFF) >= 5:
+                off += 12                       # consensusBranchId + lockTime + expiryHeight
+
+        def rv(o: int):
+            v = b[o]; o += 1
+            if v < 0xFD: return v, o
+            if v == 0xFD: return int.from_bytes(b[o:o + 2], "little"), o + 2
+            if v == 0xFE: return int.from_bytes(b[o:o + 4], "little"), o + 4
+            return int.from_bytes(b[o:o + 8], "little"), o + 8
+
+        nin, off = rv(off)
+        for _ in range(nin):
+            off += 36                           # prevout(32+4)
+            sl, off = rv(off); off += sl + 4    # script + sequence
+        nout, off = rv(off)
+        total = 0
+        for _ in range(nout):
+            total += int.from_bytes(b[off:off + 8], "little"); off += 8
+            sl, off = rv(off); off += sl        # value + script
+        return total
+    except Exception:                           # noqa: BLE001
+        return 0
 
 def varint(n: int) -> bytes:
     if n < 0xFD:
@@ -191,8 +229,10 @@ class Job:
     merkle_branch: list[bytes]
     merkle_root: bytes = b""
     template_txs: list[str] = field(default_factory=list)
-    coinbase_value: int = 0
-    # mode 2: this job carries the pool-built coinbase verbatim (miner / pool / protocol lockbox)
+    coinbase_value: int = 0            # total transparent outputs (shielded ones cannot be read off-chain)
+    subsidy_miner: float = 0.0         # miner subsidy (ZEC), from Zebra getblocksubsidy
+    subsidy_total: float = 0.0         # total block subsidy (ZEC)
+    # Mode 2: this job carries the pool-built coinbase (miner / pool / protocol outputs) verbatim
     coinbase_raw: bytes = b""
     mode2_address: str = ""
     generated_at: float = field(default_factory=time.time)
@@ -201,15 +241,15 @@ class Job:
         """Zcash SV1 mining.notify parameter order:
         [job_id, version, prevhash, merkleroot, reserved(=commitments), ntime, bits, clean]
 
-        **Every field is sent in header-internal (standard) byte order**: Z15 firmware writes the
-        received hex string byte by byte into the 140-byte header — verified by reverse-engineering
-        with an Equihash(200,9) verifier. So the encoding here must be the standard header form:
-          version  → little-endian ("04000000" for 4)
-          prevhash → fully reversed (internal order)
-          ntime    → little-endian
-          bits     → little-endian
-        merkleroot / reserved are already internal order and are passed through as-is.
-        Get the byte order wrong here and every share — and every real block — is invalid.
+        **Every field goes out in the header's internal (standard) byte order**: Z15 firmware writes the hex
+        string it receives byte-for-byte into the 140-byte header - proven by reverse-engineering the
+        Equihash(200,9) verifier (see equihash_verify.py). The standard header encoding is therefore required:
+          version  -> little endian (4 bytes as "04000000")
+          prevhash -> fully byte-reversed (internal order)
+          ntime    -> little endian
+          bits     -> little endian
+        merkleroot / reserved are already in internal order and go out as-is.
+        A byte-order mistake here makes every share and every real block invalid.
         """
         return [
             self.job_id,
@@ -224,20 +264,20 @@ class Job:
 
 
 class JobManager:
-    """Pull a template from zebrad GBT and turn it into an SV1 job."""
+    """Pull templates from Zebra GBT and turn them into SV1 jobs."""
 
     def __init__(self, rpc: ZebraRPC, cfg: dict[str, Any]) -> None:
         self.rpc = rpc
         self.poll_seconds = float(cfg.get("template_poll_seconds", 5))
         self.current: Job | None = None
-        self.previous: Job | None = None      # keep the previous job: in-flight submissions stay valid
-        # No extraNonce is injected into the coinbase: zebrad's version is used verbatim and the
-        # search space comes from the 32-byte nonce (see the module docstring).
+        self.previous: Job | None = None      # keep the previous job: submissions during a switch stay valid
+        # No extraNonce is inserted into the coinbase: Zebra's version is used verbatim and the search
+        # space comes from the 32-byte nonce (see the module header).
         self.extranonce1_size = 4
         self.extranonce2_size = 0
         self._seq = 0
         self._current_fingerprint: tuple | None = None
-        self.last_template: dict[str, Any] | None = None   # mode 2 rebuilds the coinbase from this
+        self.last_template: dict[str, Any] | None = None   # mode 2 rebuilds its own coinbase from this
         self._lock = asyncio.Lock()
 
     async def refresh(self) -> Job | None:
@@ -246,25 +286,35 @@ class JobManager:
                 tpl = await asyncio.get_running_loop().run_in_executor(
                     None, self.rpc.call, "getblocktemplate", []
                 )
+                # 2026-09-23: Zebra's GBT has no coinbasevalue, so the subsidy comes from getblocksubsidy;
+                # the miner's share is usually a shielded output and cannot be read off-chain (only funding streams are transparent).
+                try:
+                    _sub = await asyncio.get_running_loop().run_in_executor(
+                        None, self.rpc.call, "getblocksubsidy", []
+                    ) or {}
+                except Exception:
+                    _sub = {}
             except Exception as exc:
                 log.warning("getblocktemplate failed: %s", exc)
                 return None
             self.last_template = tpl
             fingerprint = self._fingerprint(tpl)
-            # Reuse the job_id while the template is unchanged so miners do not reset per poll
+            # Reuse the same job_id while the template is unchanged, so miners do not reset on every poll
             if (
                 fingerprint is not None
                 and self.current is not None
                 and fingerprint == self._current_fingerprint
             ):
                 return self.current
-            job = self._build_job(tpl)
+            job = self._build_job(tpl, _sub)
             if job:
                 self._current_fingerprint = fingerprint
                 log.info(
-                    "new job height=%s tx=%s coinbase=%.8f ZEC",
+                    "new job height=%s tx=%s subsidy=%.8f ZEC (miner %.8f - transparent %.8f)",
                     job.height,
                     len(job.template_txs),
+                    job.subsidy_total or (job.subsidy_miner + job.coinbase_value / 1e8),
+                    job.subsidy_miner,
                     job.coinbase_value / 1e8,
                 )
             if job is not None and job is not self.current:
@@ -274,7 +324,7 @@ class JobManager:
 
     @staticmethod
     def _fingerprint(tpl: dict[str, Any]) -> tuple | None:
-        """Template identity: height + prevhash + transaction set + commitment roots. Only a change needs a new job."""
+        """Template identity: height + prevhash + tx set + commitment root. A new job is needed only on change."""
         try:
             return (
                 int(tpl["height"]),
@@ -285,7 +335,7 @@ class JobManager:
         except Exception:
             return None
 
-    def _build_job(self, tpl: dict[str, Any]) -> Job | None:
+    def _build_job(self, tpl: dict[str, Any], sub: dict | None = None) -> Job | None:
         try:
             coinbase_hex: str = tpl["coinbasetxn"]["data"]
             commitments = tpl.get("blockcommitmentshash") or tpl.get("finalsaplingroothash")
@@ -296,8 +346,8 @@ class JobManager:
             branch = [hex2bytes_reversed(t["hash"]) for t in tpl.get("transactions", [])]
 
             raw = bytes.fromhex(coinbase_hex)
-            coinb1 = raw      # whole coinbase, verbatim
-            coinb2 = b""      # no split
+            coinb1 = raw      # the whole coinbase, verbatim
+            coinb2 = b""      # nothing is split off
             root = merkle_root(dsha256(raw), branch)
 
             self._seq += 1
@@ -314,10 +364,13 @@ class JobManager:
                 merkle_branch=branch,
                 merkle_root=root,
                 template_txs=txs,
-                coinbase_value=int(tpl.get("coinbasevalue") or 0),
+                # 2026-09-23 fix: Zebra returns no coinbasevalue, so decode the real amount from coinbasetxn
+                coinbase_value=coinbase_output_sum(raw) or int(tpl.get("coinbasevalue") or 0),
+                subsidy_miner=float((sub or {}).get("miner") or 0.0),
+                subsidy_total=float((sub or {}).get("totalblocksubsidy") or 0.0),
             )
         except Exception as exc:
-            log.exception("failed to build job: %s", exc)
+            log.exception("job construction failed: %s", exc)
             return None
 
 class Client:
@@ -328,26 +381,26 @@ class Client:
         self.worker = ""
         self.difficulty = 1.0
         self.subscribed = False
+        self.authorized = False
         self.shares = 0
         self.accepted = 0
         self.rejected = 0
         self.connected_at = time.time()
         self.last_activity = time.time()
         self.peer = writer.get_extra_info("peername")
-        # Vardiff: share timestamps for the last minute + a grace window after difficulty changes
+        # P2 vardiff: share timestamps of the last minute + the grace window around a difficulty switch
         self.share_times: list[float] = []
-        self.low_diff_times: list[float] = []      # low_difficulty reject timestamps (difficulty feedback)
-        self.diff_locked = False                   # miner keeps its own difficulty (ignores set_difficulty)
+        self.low_diff_times: list[float] = []      # low_difficulty reject timestamps (drive difficulty adaptation)
+        self.diff_locked = False                   # miner keeps its own difficulty (ignore set_difficulty)
         self.last_vardiff = time.time()
         self.grace_difficulty = 0.0
         self.grace_until = 0.0
         self.fixed_difficulty = False
-        # mode 2: this miner's payout address and per-miner job (99/1 split inside the coinbase)
+        # Mode 2: this miner's own payout address and dedicated job (its coinbase carries the 99/1 split)
         self.mode2_address = ""
         self.mode2_job: Job | None = None
         self.mode2_prev_job: Job | None = None
-        # Only sessions that completed authorize count as online miners; bare scanner sockets do not
-        self.authorized = False
+        self.mode2_prev_jobs: "deque[Job]" = deque(maxlen=6)   # keep recent generations to absorb job rotation
 
     async def send(self, obj: dict[str, Any]) -> None:
         self.writer.write((json.dumps(obj) + "\n").encode())
@@ -367,7 +420,9 @@ class PoolServer:
         self.jobs = JobManager(self.rpc, cfg)
         self.clients: set[Client] = set()
         self.default_difficulty = float(cfg.get("default_difficulty", 1.0))
-        # ---- vardiff (adaptive difficulty) ----
+        # ---- P5 heartbeat broadcast: re-send the current job to subscribed miners every N seconds ----
+        self.heartbeat_seconds = float(cfg.get("heartbeat_seconds", 60))
+        # ---- P2 vardiff (dynamic difficulty) ----
         vd = cfg.get("vardiff") or {}
         self.vardiff_enabled = bool(vd.get("enabled", True))
         self.vardiff_min = float(vd.get("min_difficulty", 16))
@@ -378,12 +433,15 @@ class PoolServer:
         self.vardiff_grace = float(vd.get("grace_seconds", 45))
         self.vardiff_warmup = float(vd.get("warmup_seconds", 45))
         self.vardiff_fixed_prefixes = tuple(vd.get("fixed_worker_prefixes", ["local."]))
-        # Reject-rate feedback: a rig mining at a lower difficulty than we assigned (typical: rental
-        # platforms pinning a static difficulty, firmware ignoring set_difficulty) produces many
-        # low_difficulty rejects. Above the threshold the pool steps down to match what it actually mines.
+        # Reject-rate feedback: when a rig mines at a lower difficulty than we send (a rental panel's static
+        # difficulty, or firmware ignoring set_difficulty) we see many low_difficulty rejects. Once the ratio
+        # crosses the threshold we step down, so the pool's target matches what the miner actually solves.
         self.vardiff_reject_ratio = float(vd.get("reject_ratio_threshold", 0.30))
         self.vardiff_min_samples = int(vd.get("min_samples", 6))
-        # Remembered per-worker difficulty, so a reconnect does not re-converge from scratch
+        # Real-solution check: below this share-difficulty threshold we additionally verify the submitted
+        # solution with the Equihash(200,9) verifier (CPU-rig channel only; not for high-difficulty ASIC traffic).
+        self.verify_solution_below = float(cfg.get("verify_solution_below_difficulty", 0.0))
+        # Per-worker learned difficulty, so a reconnect does not re-converge from scratch
         self.learned_difficulty: dict[str, float] = {}
         self.learned_path = cfg.get("learned_difficulty_file",
                                     os.path.join(os.path.dirname(
@@ -393,10 +451,10 @@ class PoolServer:
             self.learned_difficulty = {str(k): float(v)
                                        for k, v in json.load(
                                            open(self.learned_path, encoding="utf-8")).items()}
-            log.info("loaded learned difficulty for %d worker(s)", len(self.learned_difficulty))
+            log.info("loaded remembered difficulty for %d miners", len(self.learned_difficulty))
         except Exception:  # noqa: BLE001
             self.learned_difficulty = {}
-        # ---- mode 2: on-chain split (99% miner / 1% pool / fixed protocol lockbox) ----
+        # ---- Mode 2: on-chain dynamic split (miner 99% / pool 1% / protocol lockbox fixed) ----
         m2 = cfg.get("mode2") or {}
         self.mode2_enabled = bool(m2.get("enabled", False))
         self.mode2_fee_address = str(m2.get("pool_fee_address", "")).strip()
@@ -404,9 +462,9 @@ class PoolServer:
         self.mode2_whitelist = tuple(m2.get("whitelist_prefixes", ["local."]))
         self._mode2_seq = 0
         if self.mode2_enabled and not self.mode2_fee_address:
-            log.error("mode2.enabled=true but pool_fee_address is empty — mode 2 disabled")
+            log.error("mode2.enabled=true but pool_fee_address is not configured; disabling mode 2")
             self.mode2_enabled = False
-        # ---- dashboard statistics ----
+        # -- dashboard statistics --
         self.started_at = time.time()
         self.status_file = cfg.get("status_file", "/var/lib/zecpool/status.json")
         self.status_push_url = str(cfg.get("status_push_url", "") or "")
@@ -417,7 +475,7 @@ class PoolServer:
         self.history: list[dict[str, float]] = []                # hashrate curve samples
         self.shares_total = 0
         self.shares_rejected = 0
-        # ---- share counters are persisted so a restart does not reset the public numbers ----
+        # -- share counters are persisted: a restart must not reset the public history --
         self.counter_file = cfg.get("counter_file", "/var/lib/zecpool/counters.json")
         try:
             _c = json.load(open(self.counter_file, encoding="utf-8"))
@@ -427,18 +485,17 @@ class PoolServer:
                      self.shares_total, self.shares_rejected)
         except Exception:  # noqa: BLE001
             pass
-        # ---- public counters describe external miners only ----
-        # Our own test rigs (loopback CPU probes, whitelabel rigs) must never move the numbers a
-        # visitor compares against our claims; they are counted separately for diagnostics.
-        self.internal_prefixes = tuple(
-            str(p).strip().lower() for p in cfg.get("internal_worker_prefixes", []) if str(p).strip())
+        # -- internal test rigs: excluded from the public statistics --
+        # config plus built-in defaults, so a deploy script rewriting config cannot leak the rig back
+        _internal_cfg = [str(p).strip().lower() for p in cfg.get("internal_worker_prefixes", []) if str(p).strip()]
+        self.internal_prefixes = tuple(dict.fromkeys(_internal_cfg + list(INTERNAL_WORKER_LABELS)))
         self.internal_accepted = 0
         self.internal_rejected = 0
         self.reject_reasons: dict[str, int] = {}
-        self.recent_sessions: list[dict[str, Any]] = []   # recently closed sessions, for troubleshooting
+        self.recent_sessions: list[dict[str, Any]] = []   # keep just-closed sessions for debugging
 
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        # Disable Nagle (removes ~40 ms coalescing latency) and enable TCP keepalive so that
+        # P1: disable Nagle (removes 40 ms-class coalescing delay) and enable TCP keepalive, so
         # mining.notify / mining.submit travel unbuffered.
         try:
             sock = writer.get_extra_info("socket")
@@ -452,12 +509,20 @@ class PoolServer:
         log.info("miner connected %s", client.peer)
         try:
             while True:
-                line = await reader.readline()
+                try:
+                    line = await reader.readline()
+                except (ValueError, asyncio.LimitOverrunError,
+                        ConnectionResetError, asyncio.IncompleteReadError):
+                    # Over-long line (>64 KB without a newline): asyncio raises LimitOverrunError/ValueError.
+                    # Drop this one client; it must not become an unhandled exception.
+                    break
                 if not line:
                     break
                 try:
                     msg = json.loads(line.decode().strip())
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    # Public scanners / broken firmware send non-UTF-8 or non-JSON bytes: skip the line instead
+                    # of turning the connection into a traceback (the ERROR observed in the logs on 2026-09-27).
                     continue
                 await self.dispatch(client, msg)
         except (ConnectionResetError, asyncio.IncompleteReadError):
@@ -508,17 +573,31 @@ class PoolServer:
             client.fixed_difficulty = bool(
                 self.vardiff_fixed_prefixes and client.worker.startswith(self.vardiff_fixed_prefixes)
             )
-            # ---- mode 2: strictly refuse invalid addresses (worker must be <t1/t3 address>.<name>) ----
+            # ---- Mode 2: strictly reject invalid addresses (worker must be <t1/t3 address>.<rig name>) ----
             mode2_bypass = bool(
                 self.mode2_whitelist and client.worker.startswith(self.mode2_whitelist)
             )
             if self.mode2_enabled and _MODE2_MODULES and not mode2_bypass:
                 addr = self._mode2_parse_worker(client.worker)
                 if addr is None:
-                    log.warning("authorize refused (invalid ZEC address) worker=%s peer=%s",
+                    log.warning("authorize rejected (Invalid ZEC address) worker=%s peer=%s",
                                 client.worker, client.peer)
                     await client.send({"id": mid, "result": False,
                                        "error": [20, "Invalid ZEC address", None]})
+                    try:
+                        client.writer.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return
+                if addr == self.mode2_fee_address:
+                    # Diligence red line: if the miner's payout address equals the pool's 1% fee address, the on-chain
+                    # 99/1 split is just moving coins between the operator's own pockets (it proves nothing and looks
+                    # like a related-party transfer). Rejecting it here makes the pool/miner separation a property of
+                    log.warning("authorize rejected (miner address equals the pool fee address; 99/1 separation violated)"
+                                " worker=%s peer=%s addr=%s",
+                                client.worker, client.peer, addr)
+                    await client.send({"id": mid, "result": False,
+                                       "error": [20, "Mining address must differ from pool fee address", None]})
                     try:
                         client.writer.close()
                     except Exception:  # noqa: BLE001
@@ -531,20 +610,23 @@ class PoolServer:
                     await client.send({"id": mid, "result": False,
                                        "error": [20, "Pool is building your payout coinbase, retry", None]})
                     return
-                log.info("mode-2 authorize worker=%s payout=%s fee=%.2f%% → pool %s",
+                log.info("mode2 authorize worker=%s payout=%s fee=%.2f%% -> pool %s",
                          client.worker, addr, self.mode2_fee_pct, self.mode2_fee_address)
-            # Start from the remembered difficulty to skip re-convergence on reconnect
+            # Start from the remembered difficulty, skipping the re-convergence after every reconnect
             if client.worker in self.learned_difficulty:
                 client.difficulty = self.learned_difficulty[client.worker]
                 client.last_vardiff = time.time()
-                # A remembered value below the default means the rig keeps its own difficulty
-                # (it ignores set_difficulty), so lock it instead of probing upward and eating rejects.
+                # A remembered value below the default means this rig keeps its own difficulty (it ignores
+                # set_difficulty): lock it, so a reconnect does not repeat the upward probe that costs rejects.
                 if client.difficulty < self.default_difficulty:
                     client.diff_locked = True
-            client.authorized = True
             await client.send({"id": mid, "result": True, "error": None})
+            client.authorized = True
             log.info("authorize worker=%s difficulty=%.3f%s", client.worker, client.difficulty,
-                     " (fixed-difficulty prefix)" if client.fixed_difficulty else "")
+                     " (fixed-difficulty whitelist)" if client.fixed_difficulty else "")
+            # Subscribe sent the default difficulty; authorize may change it (remembered difficulty / mode 2),
+            # so set_difficulty is re-sent - otherwise the miner keeps the old target and wastes real solutions.
+            await client.notify_difficulty()
             if client.mode2_job is not None:
                 await client.notify_job(client.mode2_job, clean=True)
             return
@@ -571,22 +653,26 @@ class PoolServer:
         _, job_id, ntime, nonce = params[0], params[1], params[2], params[3]
         solution = pick_solution(params[4:])
         if len(params) > 5:
-            # Compatibility telemetry: someone sent an extra parameter (extranonce2-style submit).
+            # Compatibility observation: log the 6-parameter firmware shape (we advertise extranonce2_size=0)
             log.info("submit shape: %d params worker=%s", len(params), client.worker)
         if job_id != job.job_id:
-            # Right after a broadcast, miners are usually still submitting against the previous job:
-            # validate with that job's fields, otherwise those shares would be mislabelled stale.
+            # Right after a job is broadcast a miner often still submits the previous job: if that job is one
+            # we issued, validate against its fields (otherwise those shares would be wrongly rejected as stale).
             previous = self.jobs.previous
             if previous is not None and job_id == previous.job_id:
                 job = previous
             elif client.mode2_prev_job is not None and job_id == client.mode2_prev_job.job_id:
                 job = client.mode2_prev_job
             else:
-                client.rejected += 1
-                self._count_share(client, False)
-                self._bump_reason("stale_job", client)
-                await client.send({"id": mid, "result": False, "error": [21, "stale job", None]})
-                return
+                hist = next((j for j in client.mode2_prev_jobs if j.job_id == job_id), None)
+                if hist is not None:
+                    job = hist
+                else:
+                    client.rejected += 1
+                    self._count_share(client, False)
+                    self._bump_reason("stale_job", client)
+                    await client.send({"id": mid, "result": False, "error": [21, "stale job", None]})
+                    return
 
         try:
             # The solution is part of the header: hash the COMPLETE header, otherwise the
@@ -594,7 +680,7 @@ class PoolServer:
             # hash (and real ASIC shares would be rejected as "low difficulty").
             header = self.build_header(job, ntime, nonce, solution, client.extranonce1)
         except Exception as exc:
-            log.warning("failed to build header: %s", exc)
+            log.warning("header construction failed: %s", exc)
             client.rejected += 1
             self._count_share(client, False)
             self._bump_reason("bad_share", client)
@@ -602,7 +688,7 @@ class PoolServer:
             return
 
         header_hash = dsha256(header)
-        # After a difficulty change, in-flight shares are still accepted at the older (lower) value
+        # After a vardiff switch, in-flight shares are still accepted at the old (lower) difficulty for a grace period
         effective = self._accept_difficulty(client)
         if not hash_meets_target(header_hash, target_from_difficulty(effective)):
             client.rejected += 1
@@ -617,15 +703,33 @@ class PoolServer:
                 target_from_difficulty(effective),
             )
             await client.send({"id": mid, "result": False, "error": [23, "low difficulty share", None]})
-            await self._maybe_vardiff(client)      # reject-rate feedback may step difficulty down
+            await self._maybe_vardiff(client)      # reject-rate feedback: may need to step down
             return
 
         client.shares += 1
         client.accepted += 1
         client.last_activity = time.time()
+        # CPU-rig channel: below the threshold, verify the submitted solution for real (Equihash 200,9)
+        if self.verify_solution_below > 0 and effective <= self.verify_solution_below:
+            try:
+                import equihash_verify as _ev
+                if not _ev.verify(header[:140], bytes.fromhex(solution)):
+                    log.warning("DIAG invalid_solution worker=%s height=%s solution failed the Equihash check",
+                                client.worker, job.height)
+                    client.accepted -= 1
+                    client.rejected += 1
+                    self._count_share(client, False)
+                    self._bump_reason("invalid_solution", client)
+                    await client.send({"id": mid, "result": False,
+                                       "error": [20, "invalid equihash solution", None]})
+                    return
+                log.info("real-solution check passed worker=%s height=%s - Valid Equihash 200,9 solution",
+                         client.worker, job.height)
+            except ImportError:
+                pass
         self._count_share(client, True)
         client.share_times.append(time.time())
-        # internal test rigs stay out of the public view (rolling hashrate + worker list)
+        # Internal test rigs never reach the public view (rolling hashrate / worker list)
         if not self._is_internal_worker(client.worker):
             self.share_events.append((time.time(), client.worker or "unknown", effective))
             self.worker_total[client.worker or "unknown"] = (
@@ -635,7 +739,7 @@ class PoolServer:
         await self._maybe_vardiff(client)
 
         if hash_meets_target(header_hash, self._target_from_bits(job.bits)):
-            log.warning("network difficulty met height=%s worker=%s → submitblock", job.height, client.worker)
+            log.warning("network difficulty hit height=%s worker=%s -> submitblock", job.height, client.worker)
             await self.submit_block(job, ntime, nonce, solution, client.extranonce1)
         else:
             log.info(
@@ -647,18 +751,18 @@ class PoolServer:
 
     def build_header(self, job: Job, ntime: str, nonce: str, solution: str | None = None,
                      extranonce1: str = "") -> bytes:
-        """Assemble the block header from zebrad's coinbase plus the miner's ntime/nonce.
+        """Assemble the block header from Zebra's verbatim coinbase plus the miner's ntime/nonce.
 
-        Note: a Zcash (Equihash) block header is version|prevhash|merkleroot|commitments|time|bits|nonce|solution,
-        where the solution is a **variable-length, length-prefixed field that belongs to the header**; the
-        block hash is SHA256d over the *whole* header. Dropping the solution yields a different hash, which
-
-        nonce: a Z15 submits 28 bytes; the header's 32-byte nonce = **pool extranonce1(4B) ‖ miner 28B**
-        (confirmed by Equihash verification; padding with four zero bytes was the original bug).
+        Note: the Zcash (Equihash) block header is version|prevhash|merkleroot|commitments|time|bits|nonce|solution,
+        where the solution is a variable-length field (with a length prefix) that IS part of the header; the block hash
+        is SHA256d over the complete header including the solution. Omitting it yields a completely different hash -
+shares could not be validated correctly and a real block could never be detected.
+        nonce: a Z15 submits only 28 bytes; the 32-byte header nonce = pool-sent extranonce1 (4 B) || miner 28 B
+        (proven by Equihash verification; padding with four zero bytes was the direct cause of that earlier bug).
         """
         coinbase = job.coinb1 + job.coinb2
-        # In a mode-2 job the merkle root is already final in the pool-built coinbase, so use it;
-        # node-coinbase jobs are computed from coinb1/coinb2 + the branch (both agree).
+        # Mode 2 jobs already fix the merkle root through the pool-built coinbase; node-built coinbase jobs
+        # compute it from coinb1/coinb2 plus the branch (both give the same result).
         root = job.merkle_root or merkle_root(dsha256(coinbase), job.merkle_branch)
         submitted = bytes.fromhex(nonce)
         if len(submitted) == 32:
@@ -671,8 +775,8 @@ class PoolServer:
             + hex2bytes_reversed(job.prevhash_display)
             + root
             + job.commitments_hash
-            # ntime comes back verbatim: notify sent it as a **little-endian** hex string, so it must be
-            # written byte for byte — repacking it as an integer would reverse it a second time.
+            # ntime is echoed back by the miner: notify sends it as a little-endian hex string, so it must be
+            # written back byte-for-byte, not re-packed as an integer (that would reverse it twice).
             + bytes.fromhex(ntime.rjust(8, "0"))
             + bytes.fromhex(job.bits)[::-1]
             + nonce_bytes
@@ -680,8 +784,8 @@ class PoolServer:
         if solution is None:
             return fixed
         sol = bytes.fromhex(solution)
-        # Z15 firmware already prefixes the solution with its CompactSize length (fd4005 = 1344).
-        # Adding a second prefix produces an invalid block — a solved block would simply be lost.
+        # The solution submitted by Z15 firmware already carries the CompactSize length prefix (fd4005 = 1344).
+        # Wrapping another prefix around it produces an invalid block - a real block would be lost outright.
         if len(sol) > 3 and sol[0] == 0xFD and int.from_bytes(sol[1:3], "little") == len(sol) - 3:
             sol = sol[3:]
         return fixed + varint(len(sol)) + sol
@@ -695,7 +799,7 @@ class PoolServer:
 
     async def submit_block(self, job: Job, ntime: str, nonce: str, solution: str,
                            extranonce1: str = "") -> None:
-        # mode-2 jobs use the pool-built coinbase (99/1 split); everything else uses zebrad's
+        # Mode 2 jobs use the pool-built coinbase (with the 99/1 split); everything else uses the node's
         coinbase = job.coinbase_raw or (job.coinb1 + job.coinb2)
         # build_header now appends the length-prefixed solution itself, so the block is
         # simply the full header followed by the transactions.
@@ -708,17 +812,18 @@ class PoolServer:
             )
             log.warning("submitblock returned: %s (None = accepted)", result)
         except Exception as exc:
-            log.error("submitblock error: %s", exc)
+            log.error("submitblock failed: %s", exc)
 
     async def poll_templates(self) -> None:
-        """Two-speed polling: a 0.5 s lightweight getbestblockhash probe that triggers a full GBT pull the
+        """P3 dual-speed probe: a 0.5 s lightweight getbestblockhash, then a full GBT + broadcast on a new block.
 
-        moment a new block appears. Routine refreshes follow poll_seconds to track mempool and fee
-        changes, but a bestblockhash change is broadcast immediately — sub-second block awareness.
+        Templates refresh on poll_seconds (only to follow mempool / fee changes), but as soon as bestblockhash
+        changes we refresh immediately, cutting the 'a block was found' latency from seconds to sub-second.
         """
         loop = asyncio.get_running_loop()
         last_full = 0.0
         last_best: str | None = None
+        last_broadcast = time.time()
         while True:
             started = time.time()
             try:
@@ -746,15 +851,17 @@ class PoolServer:
                 # seconds and effective hashrate collapses.
                 clean = (prev_prevhash is None) or (job.prevhash_display != prev_prevhash)
                 if new_block:
-                    log.info("probe saw new block %.8s… → refreshing template and broadcasting clean_jobs", str(best))
+                    log.info("probe saw a new block %.8s... -> refreshing the template and broadcasting clean_jobs", str(best))
                 for client in list(self.clients):
                     if client.subscribed:
                         try:
-                            # mode-2 clients: every template change needs a fresh per-miner coinbase job
-                            # (the merkle root commits to the 99/1 coinbase)
+                            # Mode 2 clients rebuild "their own coinbase job" on every template change
+                            # (the merkle root commits to the 99/1 split coinbase)
                             if self.mode2_enabled and _MODE2_MODULES and client.mode2_address:
                                 newjob = await self._mode2_refresh(client)
                                 if newjob is not None:
+                                    if client.mode2_job is not None:
+                                        client.mode2_prev_jobs.append(client.mode2_job)
                                     client.mode2_prev_job = client.mode2_job
                                     client.mode2_job = newjob
                                     await client.notify_job(newjob, clean=clean)
@@ -762,14 +869,47 @@ class PoolServer:
                             await client.notify_job(job, clean=clean)
                         except Exception:
                             pass
+                last_broadcast = time.time()
+            # P5 heartbeat: more than heartbeat_seconds since the last broadcast -> re-send the current job
+            # (same content, clean_jobs=false) so NAT/firewalls keep seeing traffic and do not silently drop the
+            # long-lived connection during quiet periods (the 2026-09-22 false-alive incident).
+            if self.heartbeat_seconds > 0 and (time.time() - last_broadcast) >= self.heartbeat_seconds:
+                await self.broadcast_heartbeat()
+                last_broadcast = time.time()
             await asyncio.sleep(0.5)
+
+    async def broadcast_heartbeat(self) -> None:
+        """Heartbeat broadcast (P5): re-send the current job to subscribed miners, clean_jobs=false.
+
+        The pool only pushes mining.notify when the template changes, so during RPC stalls or quiet gaps the
+        connection stays silent and NAT/firewall paths may drop it - presenting as 'process alive, connection
+        ESTABLISHED, every share lost locally' (the 2026-09-22 16:39 incident). The heartbeat changes neither
+        job_id nor difficulty, so miners do not discard work in progress.
+        """
+        sent = 0
+        for client in list(self.clients):
+            if not client.subscribed:
+                continue
+            try:
+                if self.mode2_enabled and _MODE2_MODULES and client.mode2_address:
+                    job = client.mode2_job
+                else:
+                    job = self.jobs.current
+                if job is None:
+                    continue
+                await client.notify_job(job, clean=False)
+                sent += 1
+            except Exception:  # noqa: BLE001
+                pass
+        if sent:
+            log.info("heartbeat broadcast: %d miners received the current job (clean_jobs=false)", sent)
 
     # Equihash 200,9: a difficulty-1 share needs 2^13 hashes on average
     HASHRATE_FACTOR = 8192
 
-    # ------------------------------------------------------------------- mode 2
+    # ---------------------------------------------------------------- mode 2
     def _mode2_parse_worker(self, worker: str) -> str | None:
-        """`<t1/t3 address>.<worker name>` → address; None when invalid (strictly refused)."""
+        """`<t1/t3 address>.<rig name>` -> address; None when invalid (strictly rejected)."""
         addr = (worker or "").split(".", 1)[0].strip()
         if len(addr) < 26 or len(addr) > 40 or not addr[0] in ("t",):
             return None
@@ -785,12 +925,12 @@ class PoolServer:
         return f"{base.job_id if base else '0'}{self._mode2_seq % 0x10000:04x}"
 
     def _mode2_build_job(self, client: Client, base: Job, tpl: dict) -> Job | None:
-        """Build the per-miner job (99/1 split) from the current template and this miner's address."""
+        """Build the miner-specific job (with the 99/1 split) from the current template and payout address."""
         try:
             built = build_coinbase.build_dynamic_coinbase(
                 tpl, client.mode2_address, self.mode2_fee_address, self.mode2_fee_pct)
         except Exception as exc:  # noqa: BLE001
-            log.error("mode-2 coinbase build failed worker=%s: %s", client.worker, exc)
+            log.error("mode 2 coinbase construction failed worker=%s: %s", client.worker, exc)
             return None
         txids = [built["txid"]] + [bytes.fromhex(t["hash"])[::-1]
                                    for t in tpl.get("transactions", [])]
@@ -822,19 +962,19 @@ class PoolServer:
         return await loop.run_in_executor(None, self._mode2_build_job, client, base, tpl)
 
     def _accept_difficulty(self, client: Client) -> float:
-        """Difficulty used for validation: during the post-change grace window the lower of new/old wins."""
+        """Validation difficulty: during the grace window after a switch, take the lower of new/old (friendlier to the miner)."""
         if client.grace_until > time.time() and client.grace_difficulty > 0:
             return min(client.difficulty, client.grace_difficulty)
         return client.difficulty
 
     async def _maybe_vardiff(self, client: Client) -> None:
-        """Adaptive difficulty, including **reject-rate feedback**.
+        """P2 vardiff (with **reject-rate feedback**).
 
         Decision order (evaluated every interval_seconds over a 60 s window):
-          1. **reject rate above the threshold** (30% default) → step down: the rig is mining at a
-             lower difficulty than assigned (static rental-platform difficulty, firmware ignoring set_difficulty);
-          2. accepted rate above the target ceiling → step up; below half the floor → step down;
-        After a change the window is cleared and a grace period protects in-flight shares.
+          1. **reject ratio > threshold** (30% by default) -> step down: the rig really mines at a lower
+             difficulty (typical causes: a rental panel's static difficulty, or firmware ignoring set_difficulty);
+          2. accepted rate above the target ceiling -> step up; below half the target floor -> step down;
+        after a switch the window resets and a grace period keeps in-flight shares from being wrongly rejected.
         The caller records events into share_times / low_diff_times.
         """
         if not self.vardiff_enabled or client.fixed_difficulty:
@@ -855,17 +995,17 @@ class PoolServer:
         if (total >= self.vardiff_min_samples and ratio > self.vardiff_reject_ratio
                 and client.difficulty > self.vardiff_min):
             new = max(client.difficulty / 2, self.vardiff_min)
-            # A reject rate above the threshold means the rig mines at its own lower difficulty.
-            # Mark it as self-managed: step down only, so we do not oscillate back up.
+            # A reject ratio over the threshold means this rig mines at its own (lower) difficulty and ignores
+            # what we send. Mark it as self-difficulty: step down only, never up, to avoid oscillating.
             client.diff_locked = True
-            reason = f"reject rate {ratio * 100:.0f}% ({rejected} rejected / {accepted} accepted) → step down and lock"
+            reason = f"reject ratio {ratio * 100:.0f}% ({rejected} rejected / {accepted} accepted) -> step down and lock"
         elif not client.diff_locked and accepted > self.vardiff_target_max:
             new = min(client.difficulty * 2, self.vardiff_max)
-            reason = f"rate too high ({accepted}/min) → step up"
+            reason = f"rate too high ({accepted}/min) -> step up"
         elif not client.diff_locked and accepted < self.vardiff_target_min / 2 \
                 and client.difficulty > self.vardiff_min:
             new = max(client.difficulty / 2, self.vardiff_min)
-            reason = f"rate too low ({accepted}/min) → step down"
+            reason = f"rate too low ({accepted}/min) -> step down"
         client.last_vardiff = now
         if new == client.difficulty:
             return
@@ -873,9 +1013,9 @@ class PoolServer:
         client.grace_difficulty = old
         client.grace_until = now + self.vardiff_grace
         client.difficulty = new
-        client.share_times = []          # re-measure after the change
+        client.share_times = []          # re-measure after a switch
         client.low_diff_times = []
-        self.learned_difficulty[client.worker] = new      # remember this rig's sweet spot
+        self.learned_difficulty[client.worker] = new      # remember this rig's suitable difficulty
         try:
             tmp = self.learned_path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
@@ -884,15 +1024,11 @@ class PoolServer:
         except Exception:  # noqa: BLE001
             pass
         await client.notify_difficulty()
-        log.info("vardiff worker=%s difficulty %.0f → %.0f (%s, grace %.0fs)",
+        log.info("vardiff worker=%s difficulty %.0f -> %.0f (%s, grace %.0fs)",
                  client.worker or "?", old, new, reason, self.vardiff_grace)
 
     def _is_internal_worker(self, worker: str) -> bool:
-        """True for our own test rigs, which must not shape the public statistics.
-
-        Matches either the whole worker string (`local.rig1`, `u1abc…`) or the label after the last
-        dot (`t1abc….cpurig`), case-insensitively. Empty list → nothing is internal.
-        """
+        """Internal test-rig detection: local./u1 prefixes, or a rig-name suffix such as .cpurig."""
         w = (worker or "").strip().lower()
         if not w or not self.internal_prefixes:
             return False
@@ -900,7 +1036,7 @@ class PoolServer:
         return any(w.startswith(p) or label.startswith(p) for p in self.internal_prefixes)
 
     def _count_share(self, client: "Client", accepted: bool) -> None:
-        """Public counters track external miners; internal rigs are counted separately."""
+        """Public counters only count external miners; internal test rigs are counted separately for debugging."""
         if self._is_internal_worker(client.worker):
             if accepted:
                 self.internal_accepted += 1
@@ -916,23 +1052,6 @@ class PoolServer:
         if client is not None and self._is_internal_worker(client.worker):
             return
         self.reject_reasons[reason] = self.reject_reasons.get(reason, 0) + 1
-
-    def _persist_counters(self) -> None:
-        """Write share counters next to the status file so restarts keep history."""
-        cur = (self.shares_total, self.shares_rejected)
-        if cur == getattr(self, "_persisted", None):
-            return
-        try:
-            tmp = self.counter_file + ".tmp"
-            os.makedirs(os.path.dirname(self.counter_file), exist_ok=True)
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump({"shares_total": self.shares_total,
-                           "shares_rejected": self.shares_rejected,
-                           "updated_at": time.time()}, fh)
-            os.replace(tmp, self.counter_file)
-            self._persisted = cur
-        except Exception:  # noqa: BLE001
-            pass
 
     def _snapshot(self) -> dict[str, Any]:
         now = time.time()
@@ -982,6 +1101,10 @@ class PoolServer:
             })
         self.recent_sessions = [s for s in self.recent_sessions if now - s["ended_at"] <= 600]
         for s in self.recent_sessions:
+            # 2026-09-27 fix: closed internal sessions must not reach the public view either (V19 rule -
+            # only live connections were filtered before, and this recent_sessions path was missed)
+            if self._is_internal_worker(s.get("worker", "")):
+                continue
             s["ended_ago"] = round(now - s["ended_at"], 1)
             s["last_activity_ago"] = s["ended_ago"]
             sessions.append(s)
@@ -995,7 +1118,6 @@ class PoolServer:
             "workers_online": sum(
                 1 for c in self.clients
                 if getattr(c, "authorized", False) and not self._is_internal_worker(c.worker)),
-            "connections_open": len(self.clients),
             "shares_total": self.shares_total,
             "shares_rejected": self.shares_rejected,
             "internal_accepted": self.internal_accepted,
@@ -1015,13 +1137,30 @@ class PoolServer:
             "updated_at": round(now, 1),
         }
 
+    def _persist_counters(self) -> None:
+        """Persist share counters next to status_file so a restart does not roll the public numbers back."""
+        cur = (self.shares_total, self.shares_rejected)
+        if cur == getattr(self, "_persisted", None):
+            return
+        try:
+            tmp = self.counter_file + ".tmp"
+            os.makedirs(os.path.dirname(self.counter_file), exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"shares_total": self.shares_total,
+                           "shares_rejected": self.shares_rejected,
+                           "updated_at": time.time()}, fh)
+            os.replace(tmp, self.counter_file)
+            self._persisted = cur
+        except Exception:  # noqa: BLE001
+            pass
+
     async def status_loop(self) -> None:
         os.makedirs(os.path.dirname(self.status_file), exist_ok=True)
         tick = 0
         while True:
             snap = self._snapshot()
             tick += 1
-            if tick % 3 == 0:  # one sample every ~6 s (≈10 min window)
+            if tick % 3 == 0:  # sample every ~6 s (about a 10 minute window)
                 self.history.append({"ts": snap["updated_at"], "hashrate": snap["hashrate"]})
                 snap = self._snapshot()
             self._persist_counters()
@@ -1029,7 +1168,7 @@ class PoolServer:
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(snap, fh, ensure_ascii=False)
             os.replace(tmp, self.status_file)
-            # When the engine runs as a front-end, push the snapshot to a dashboard so public pages stay live
+            # When deployed as the front engine (P4), push status back to the domestic dashboard so the public
             if self.status_push_url:
                 try:
                     body = json.dumps(snap, ensure_ascii=False).encode()
@@ -1051,7 +1190,7 @@ class PoolServer:
         port = int(self.cfg.get("listen_port", 3032))
         server = await asyncio.start_server(self.handle, host, port)
         log.info(
-            "SV1 pool listening on %s:%s (current job: %s)",
+            "SV1 pool started, listening on %s:%s (current job: %s)",
             host,
             port,
             self.jobs.current.height if self.jobs.current else "none (GBT not ready)",

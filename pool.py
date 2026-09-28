@@ -387,6 +387,7 @@ class Client:
         self.rejected = 0
         self.connected_at = time.time()
         self.last_activity = time.time()
+        self.reaped = False          # set when the silent-session reaper closed this client
         self.peer = writer.get_extra_info("peername")
         # P2 vardiff: share timestamps of the last minute + the grace window around a difficulty switch
         self.share_times: list[float] = []
@@ -502,6 +503,14 @@ class PoolServer:
             if sock is not None:
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                # 2026-09-28: one-way link failures leave half-open connections and the OS default
+                # keepalive (2 h idle) detects them far too late, so zombie sessions keep counting
+                # as online. Probe after 60 s idle, every 15 s, give up after 4 misses (~2 min),
+                # complementing the silent-session reaper below.
+                for _opt, _val in (("TCP_KEEPIDLE", 60), ("TCP_KEEPINTVL", 15), ("TCP_KEEPCNT", 4)):
+                    _o = getattr(socket, _opt, None)
+                    if _o is not None:
+                        sock.setsockopt(socket.IPPROTO_TCP, _o, _val)
         except Exception:  # noqa: BLE001
             pass
         client = Client(reader, writer)
@@ -524,25 +533,28 @@ class PoolServer:
                     # Public scanners / broken firmware send non-UTF-8 or non-JSON bytes: skip the line instead
                     # of turning the connection into a traceback (the ERROR observed in the logs on 2026-09-27).
                     continue
+                client.last_activity = time.time()   # any inbound message counts as alive (reaper criterion)
                 await self.dispatch(client, msg)
         except (ConnectionResetError, asyncio.IncompleteReadError):
             pass
         finally:
             self.clients.discard(client)
-            self.recent_sessions.append({
-                "worker": client.worker or "(unauthorized)",
-                "extranonce1": client.extranonce1,
-                "difficulty": client.difficulty,
-                "connected_seconds": round(time.time() - client.connected_at, 1),
-                "accepted": client.accepted,
-                "rejected": client.rejected,
-                "peer": str(client.peer[0]) if client.peer else None,
-                "state": "closed",
-                "ended_at": time.time(),
-            })
-            self.recent_sessions = self.recent_sessions[-10:]
+            if not getattr(client, "reaped", False):
+                # only record the disconnect here if the reaper did not already do it
+                self.recent_sessions.append({
+                    "worker": client.worker or "(unauthorized)",
+                    "extranonce1": client.extranonce1,
+                    "difficulty": client.difficulty,
+                    "connected_seconds": round(time.time() - client.connected_at, 1),
+                    "accepted": client.accepted,
+                    "rejected": client.rejected,
+                    "peer": str(client.peer[0]) if client.peer else None,
+                    "state": "closed",
+                    "ended_at": time.time(),
+                })
+                self.recent_sessions = self.recent_sessions[-10:]
+                log.info("miner disconnected %s (shares=%s)", client.peer, client.shares)
             writer.close()
-            log.info("miner disconnected %s (shares=%s)", client.peer, client.shares)
 
     async def dispatch(self, client: Client, msg: dict[str, Any]) -> None:
         method = msg.get("method")
@@ -1137,6 +1149,47 @@ shares could not be validated correctly and a real block could never be detected
             "updated_at": round(now, 1),
         }
 
+    async def _reap_stale_clients(self, limit: float = 300.0) -> int:
+        """Reap "zombie" sessions (half-open connections) that went silent, returning the count.
+
+        Background (measured 2026-09-28): when a one-way link failure leaves a client socket
+        half-open (the miner has already reconnected, the pool still believes it is online), the
+        kernel keepalive is only a backstop. Any inbound message refreshes ``last_activity``;
+        a session that has been silent for ``limit`` seconds (default 5 minutes) is closed and
+        removed from the public statistics. Shares, counters and settlement logic are untouched:
+        a miner that is really working submits every few seconds, so silence for 5 minutes means
+        the connection is dead.
+        """
+        now = time.time()
+        reaped = 0
+        for c in list(self.clients):
+            last = getattr(c, "last_activity", 0.0) or 0.0
+            if now - last <= limit:
+                continue
+            reaped += 1
+            try:
+                c.reaped = True
+                c.writer.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self.clients.discard(c)
+            self.recent_sessions.append({
+                "worker": c.worker or "(unauthorized)",
+                "extranonce1": c.extranonce1,
+                "difficulty": c.difficulty,
+                "connected_seconds": round(now - c.connected_at, 1),
+                "accepted": c.accepted,
+                "rejected": c.rejected,
+                "peer": str(c.peer[0]) if c.peer else None,
+                "state": "reaped",
+                "ended_at": now,
+            })
+            log.warning("reaped silent session worker=%s (inbound silent %.0fs, half-open connection)",
+                        c.worker or "?", now - last)
+        if reaped:
+            self.recent_sessions = self.recent_sessions[-10:]
+        return reaped
+
     def _persist_counters(self) -> None:
         """Persist share counters next to status_file so a restart does not roll the public numbers back."""
         cur = (self.shares_total, self.shares_rejected)
@@ -1160,6 +1213,11 @@ shares could not be validated correctly and a real block could never be detected
         while True:
             snap = self._snapshot()
             tick += 1
+            if tick % 5 == 0:   # reap silent zombie sessions roughly every 10 s
+                try:
+                    await self._reap_stale_clients()
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("zombie session reaper failed: %s", exc)
             if tick % 3 == 0:  # sample every ~6 s (about a 10 minute window)
                 self.history.append({"ts": snap["updated_at"], "hashrate": snap["hashrate"]})
                 snap = self._snapshot()

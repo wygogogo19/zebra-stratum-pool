@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.2.1 — 2026-09-28
+
+Session-liveness hardening, mirroring the engine that is running in production.
+
+### Added
+
+- **Silent-session reaper.** `_reap_stale_clients(limit=300.0)` closes and removes any client that has
+  sent nothing for five minutes, and it runs from the status loop roughly every ten seconds. Every
+  inbound message (subscribe, authorize, share, response) refreshes `Client.last_activity`, so a miner
+  that is really working — it submits every few seconds — can never be reaped. Reaped sessions are
+  recorded with `state="reaped"` and logged as
+  `reaped silent session worker=… (inbound silent Ns, half-open connection)`.
+- **Tighter TCP keepalive on client sockets.** `TCP_KEEPIDLE=60`, `TCP_KEEPINTVL=15`, `TCP_KEEPCNT=4`
+  replace the OS default (two hours idle), so a half-open connection is detected by the kernel in about
+  two minutes instead of two hours. Each option is applied only when the platform exposes it.
+
+### Why
+
+Measured on the production deployment: a cross-border link can fail in one direction, leaving the
+client socket half-open — the miner has already reconnected while the pool still counts the old
+connection as online. With the previous defaults a zombie session lingered for up to two hours and
+inflated `workers_online` and the public `sessions` list. With this release the online miner count stays
+exact; shares, counters, settlement and the coinbase path are untouched.
+
+### Verified
+
+- Synthetic half-open session against both production entry points: reaped after **310 s** (front
+  engine) and **306 s** (fallback engine), with the corresponding reaper log line.
+- Kernel accepted and reported back `KEEPIDLE=60 KEEPINTVL=15 KEEPCNT=4 KEEPALIVE=1`.
+- A live miner session stayed connected across the whole observation window (`connected_seconds`
+  monotonically increasing, inbound silence always under 50 s) — no false positives.
+- Token-level equivalence with the deployed engine: 8259 tokens on both sides, identical token streams
+  apart from comments and string literals.
+
+### Unchanged
+
+- Share validation, Equihash (200,9) checking, vardiff, the 8-parameter `mining.notify` contract,
+  `submitblock`, counter persistence and the fee-address isolation guard.
+
 ## v0.2.0 — 2026-09-27
 
 Engine parity with the live production deployment, plus input hardening.

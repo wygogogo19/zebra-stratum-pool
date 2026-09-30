@@ -19,7 +19,7 @@ The pool never holds a balance, never takes custody, and there is nothing to wit
 
 ## Status
 
-This is the engine that serves **`stratum+tcp://zec.robotbase.cc:3032`** in production.
+This is the engine that serves **`stratum+tcp://zecpool.robotbase.cc:3032`** in production.
 
 - Share accounting to date: **11,000+ accepted / 19 rejected (99.8% valid)** with vardiff enabled — cumulative,
   restored across engine restarts, and visible live on the pool portal. New sessions start at difficulty 128 and

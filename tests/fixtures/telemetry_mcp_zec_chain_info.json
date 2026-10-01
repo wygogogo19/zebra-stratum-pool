@@ -1,0 +1,39 @@
+{
+ "bestblockhash": "00000000006b330b221c9435a093efe58f5e7f58e92a720fb6aa77e80d2d4116",
+ "blocks": 3502619,
+ "chainSupply": {
+  "chainValue": 16962475.1655448,
+  "chainValueZat": 1696247516554480,
+  "monitored": true
+ },
+ "difficulty": 215468638.87984714,
+ "estimated_height": 3502619,
+ "headers": 3502619,
+ "size_on_disk_gb": 280.41,
+ "valuePools": {
+  "ironwood": {
+   "chainValue": 4060192.64172723,
+   "monitored": true
+  },
+  "lockbox": {
+   "chainValue": 66791.25,
+   "monitored": true
+  },
+  "orchard": {
+   "chainValue": 378736.91442165,
+   "monitored": true
+  },
+  "sapling": {
+   "chainValue": 478556.33213484,
+   "monitored": true
+  },
+  "sprout": {
+   "chainValue": 22310.77535128,
+   "monitored": true
+  },
+  "transparent": {
+   "chainValue": 11955887.2519098,
+   "monitored": true
+  }
+ }
+}

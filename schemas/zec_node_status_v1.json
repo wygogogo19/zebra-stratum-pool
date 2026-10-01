@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robotbase.cc/schemas/zec_node_status_v1.json",
+  "title": "Zcash node status page payload (v1)",
+  "description": "Payload of https://zec.robotbase.cc/api/status (the node status service on LXC 9308). This is the operator-oriented view of the same node whose pool-facing view is published by the MCP tool `zec_chain_info` (schemas/zec_chain_info_v1.json): that one carries the six value pools, this one carries RPC/peer/disk health.",
+  "type": "object",
+  "required": ["updated_utc", "node", "rpc_ok", "rpc_error", "chain", "blocks", "headers",
+               "estimated_height", "best_block_hash", "difficulty", "size_on_disk_gb",
+               "verification_progress_pct", "chain_supply_zec", "blocks_behind_estimated",
+               "zebra_version", "protocol_version", "connections", "disk"],
+  "properties": {
+    "updated_utc": { "$ref": "telemetry_v1.json#/$defs/iso8601Utc" },
+    "node": { "type": "string", "description": "Container identity, e.g. 9308-zebra-mainnet." },
+    "rpc_ok": { "type": "boolean" },
+    "rpc_error": { "type": ["string", "null"] },
+    "chain": { "type": "string", "enum": ["main"] },
+    "blocks": { "type": "integer", "minimum": 0 },
+    "headers": { "type": "integer", "minimum": 0 },
+    "estimated_height": { "type": "integer", "minimum": 0 },
+    "best_block_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "difficulty": { "type": "number", "minimum": 0 },
+    "size_on_disk_gb": { "type": "number", "minimum": 0 },
+    "verification_progress_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+    "chain_supply_zec": { "type": "number", "minimum": 0 },
+    "blocks_behind_estimated": { "type": "integer", "minimum": 0 },
+    "zebra_version": { "type": "string", "pattern": "^/Zebra:[0-9]" },
+    "protocol_version": { "type": "integer", "minimum": 0 },
+    "connections": { "type": "integer", "minimum": 0 },
+    "disk": {
+      "type": "object",
+      "description": "Raw `df` row for the data volume: [device, size, used, available, use%, mountpoint].",
+      "required": ["df"],
+      "properties": {
+        "df": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

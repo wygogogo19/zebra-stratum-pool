@@ -21,13 +21,14 @@ The pool never holds a balance, never takes custody, and there is nothing to wit
 
 This is the engine that serves **`stratum+tcp://zecpool.robotbase.cc:3032`** in production.
 
-- Share accounting to date: **11,000+ accepted / 19 rejected (99.8% valid)** with vardiff enabled — cumulative,
+- Share accounting to date: **18,000+ accepted / 21 rejected (99.88% valid)** with vardiff enabled — cumulative,
   restored across engine restarts, and visible live on the pool portal. New sessions start at difficulty 128 and
   vardiff walks them to the target share rate. The figure includes the pool's own CPU probe and one rented Z15
   used for firmware-compatibility testing on 2026-09-22; workers matching `internal_worker_prefixes` are excluded
   from the public counters and reported separately (`internal_*`)
 - No Zcash block has been found by this pool yet — the numbers above are share-level, and the true-custody test is the coinbase split itself
-- Operating since September 2026 against `Zebra v6.3.0`
+- Operating since September 2026 against `Zebra v6.3.0`, with **zero node restarts since 2026-09-14**
+- **107 offline tests** and a green CI matrix (Python 3.11 / 3.12 / 3.13) — see [`docs/TESTING.md`](./docs/TESTING.md)
 
 We publish it because Zcash is deprecating `zcashd` and mining infrastructure has not followed. Solo mining
 on Zcash should not require trusting a third party's ledger of who is owed what.
@@ -130,9 +131,10 @@ submit shares against a coinbase the pool does not know about.
 
 ## Testing
 
-CI runs on every push (Python 3.11 / 3.12 / 3.13): the test suite below, plus a hygiene job that
-byte-compiles and imports every module, checks the mode-2 coinbase path, parses the shipped config
-template and verifies that tracked sources are English-only.
+CI runs on every push (Python 3.11 / 3.12 / 3.13): **107 tests**, plus a hygiene job that byte-compiles
+and imports every module, checks the mode-2 coinbase path, parses the shipped config template and verifies
+that tracked sources are English-only. The full inventory, the coverage table and the honest limits are in
+[`docs/TESTING.md`](./docs/TESTING.md).
 
 The suite runs **offline against real mainnet data** frozen in `tests/fixtures/` — a verbatim
 `getblocktemplate`/`getblocksubsidy` pair from our production node, and two shares the production pool
@@ -156,6 +158,7 @@ What the suite pins down:
 | Protocol | the 8-parameter `mining.notify` byte order, the `extranonce1 ‖ 28-byte nonce` topology, exactly one CompactSize solution prefix |
 | Share path | recorded real Equihash solutions are accepted end to end over TCP; tampered solutions and stale jobs are rejected |
 | Diligence red lines | a payout address equal to the pool fee address is refused, `local.`/`u1` rigs stay out of the public counters, and a mode-2 miner gets its own coinbase carrying the 99/1 split |
+| Telemetry contracts | the published `/api`, node-status and MCP payloads validate against the JSON Schemas in [`schemas/`](./schemas/README.md), and the validator itself is tested against broken inputs |
 
 `tests/synthetic_miner.py` is the harness behind the end-to-end tests: it starts the real engine against a
 stub node, speaks Stratum V1 over a socket, and can replay a recorded share, so the accept path is exercised
@@ -173,6 +176,17 @@ python3 pool_selftest_submit.py --host 127.0.0.1 --port 3132 --worker t1YourAddr
 See [`docs/MODE2-99-1.md`](./docs/MODE2-99-1.md) for the transaction layout, the value-pool accounting
 (including the NU6 lockbox commitment) and the failure modes we test for.
 
+## Telemetry contracts
+
+The public Zcash telemetry — `/api/zec/summary`, `/api/factors`, the node status page and the MCP
+`zec_chain_info` tool — is specified as JSON Schema in [`schemas/`](./schemas/README.md): one contract per
+surface, a shared six-value-pool definition library, and a versioning policy. Each contract is validated
+against a frozen real payload in CI, and the same dependency-free validator can check a live fetch:
+
+```bash
+python3 tests/_schema.py schemas/zec_summary_v1.json tests/fixtures/telemetry_zec_summary.json
+```
+
 ## Security notes
 
 - The engine holds **no keys and no funds**. It cannot move coins; it can only construct a coinbase that pays
@@ -185,9 +199,10 @@ See [`docs/MODE2-99-1.md`](./docs/MODE2-99-1.md) for the transaction layout, the
 
 ## Roadmap
 
-- [ ] Publish the integration test harness (synthetic miners, difficulty transitions, stale-job handling)
+- [x] Publish the integration test harness (synthetic miner over TCP, stale-job handling, mode-2 workflow)
+- [x] Stabilise the status/telemetry JSON as a documented schema ([`schemas/`](./schemas/README.md))
+- [ ] Publish a miner-firmware compatibility matrix
 - [ ] Publish an operator runbook and container recipe
-- [ ] Stabilise the status/telemetry JSON as a documented schema
 - [ ] Reproducible deployment validated by an independent operator
 
 ## Maintainer

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robotbase.cc/schemas/zec_chain_info_v1.json",
+  "title": "Zcash chain info (v1)",
+  "description": "Payload of the MCP tool `zec_chain_info` (also the shape behind https://zec.robotbase.cc/api/status): node height, supply and the six value pools, straight from our own Zebra node.",
+  "type": "object",
+  "required": ["blocks", "headers", "estimated_height", "chainSupply", "valuePools",
+               "bestblockhash", "difficulty", "size_on_disk_gb"],
+  "properties": {
+    "blocks": { "type": "integer", "minimum": 0 },
+    "headers": { "type": "integer", "minimum": 0 },
+    "estimated_height": { "type": "integer", "minimum": 0 },
+    "bestblockhash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "difficulty": { "type": "number", "minimum": 0 },
+    "size_on_disk_gb": { "type": "number", "minimum": 0 },
+    "chainSupply": { "$ref": "telemetry_v1.json#/$defs/chainSupply" },
+    "valuePools": { "$ref": "telemetry_v1.json#/$defs/valuePools" }
+  },
+  "additionalProperties": false
+}

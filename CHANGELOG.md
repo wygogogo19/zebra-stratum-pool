@@ -2,7 +2,7 @@
 
 ## Unreleased — 2026-10-01
 
-Test suite (ZCG milestone 2) plus the two correctness fixes it found.
+Test suite (ZCG milestone 2) and its two correctness fixes, plus the telemetry contracts (ZCG milestone 4).
 
 ### Fixed
 
@@ -20,17 +20,33 @@ Test suite (ZCG milestone 2) plus the two correctness fixes it found.
 
 ### Added
 
-- `tests/` — 87 tests that run offline against **real mainnet data** (a frozen `getblocktemplate` and two
+- `tests/` — 107 tests that run offline against **real mainnet data** (a frozen `getblocktemplate` and two
   shares the production pool accepted, including their 1344-byte Equihash solutions):
   * `test_build_coinbase.py` — the 99/1/Lockbox split, address handling, digest regression, offline `--selftest`;
-  * `test_zcash_v6.py`, `test_pool_core.py` — transaction parsing/digests, difficulty targets, merkle tree;
+  * `test_pool_core.py` — difficulty⇄target conversion, vardiff bounds, merkle tree, coinbase decoding,
+    submit-shape picking, internal-worker classification (the `zcash_v6` digests are exercised from
+    `test_build_coinbase.py`, `test_job_contract.py` and this file);
   * `test_job_contract.py` — the 8-parameter `mining.notify` byte-order contract;
   * `test_mode2_guards.py` — payout-address validation and the "miner address must differ from the pool fee
     address" red line, including the miner-specific coinbase layout;
   * `test_equihash_verify.py` — the verifier accepts recorded real solutions and rejects tampered ones;
   * `test_synthetic_miner.py` + `synthetic_miner.py` — a hashrate-free synthetic miner that drives the real
     engine over TCP (subscribe/authorize/notify/submit) and submits a *pre-computed, genuinely valid*
-    Equihash solution; also covers stale-job rejection and the mode-2 workflow.
+    Equihash solution; also covers stale-job rejection and the mode-2 workflow;
+  * `test_telemetry_schemas.py` — the M4 telemetry contracts (below) validate four frozen live payloads,
+    and the validator itself is tested against deliberately broken schemas and payloads.
+- `schemas/` — **telemetry contracts, v1** (ZCG milestone 4). Formal JSON Schema (draft 2020-12) for every
+  public Zcash telemetry surface, with a documented versioning policy (see `schemas/README.md`):
+  * `telemetry_v1.json` — shared definitions: the six value pools (`required`, `additionalProperties:false`),
+    chain supply, pool/network/price/template telemetry, and the display-string formats;
+  * `zec_chain_info_v1.json` — the MCP tool `zec_chain_info`;
+  * `zec_summary_v1.json` — `https://robotbase.cc/api/zec/summary`;
+  * `zec_value_pools_v1.json` — `https://robotbase.cc/api/factors`;
+  * `zec_node_status_v1.json` — `https://zec.robotbase.cc/api/status`.
+- `tests/_schema.py` — a dependency-free JSON Schema 2020-12 subset validator (with a
+  `python3 tests/_schema.py <schema> <payload>` CLI) so the contracts can be checked without `pip`.
+- `docs/TESTING.md` — the test inventory, the coverage table, fixture provenance, the CI gates and the
+  honest limits; `docs/FORUM-UPDATE-2026-10.md` — the milestone-2 report draft for the grant thread.
 - `equihash_verify.py` — the Equihash(200,9) verifier the engine optionally imports (English variant,
   token-identical to the deployed engine).
 - `pytest.ini` / `requirements-dev.txt` — test configuration with a coverage gate; CI now runs the suite on

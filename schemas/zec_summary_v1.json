@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robotbase.cc/schemas/zec_summary_v1.json",
+  "title": "Zcash pool + network summary (v1)",
+  "description": "Payload of https://robotbase.cc/api/zec/summary: live pool counters, chain/network view, a display-only price reference, the current block template and the attribution-indexer counters.",
+  "type": "object",
+  "required": ["updated_utc", "pool", "network", "price", "template", "indexer"],
+  "properties": {
+    "updated_utc": { "$ref": "telemetry_v1.json#/$defs/iso8601Utc" },
+    "pool": { "$ref": "telemetry_v1.json#/$defs/poolTelemetry" },
+    "network": { "$ref": "telemetry_v1.json#/$defs/networkTelemetry" },
+    "price": { "$ref": "telemetry_v1.json#/$defs/priceTelemetry" },
+    "template": { "$ref": "telemetry_v1.json#/$defs/templateTelemetry" },
+    "indexer": {
+      "type": "object",
+      "description": "Block-attribution index built from our own node scan.",
+      "required": ["pool_blocks", "cached_blocks"],
+      "properties": {
+        "pool_blocks": { "type": "integer", "minimum": 0 },
+        "cached_blocks": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

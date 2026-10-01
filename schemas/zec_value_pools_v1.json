@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robotbase.cc/schemas/zec_value_pools_v1.json",
+  "title": "Zcash shielded-pool factors (v1)",
+  "description": "Payload of https://robotbase.cc/api/factors: the six value pools with their 1h/24h deltas, plus the sampling metadata that says when a 24h delta becomes available.",
+  "type": "object",
+  "required": ["updated_utc", "groups", "histo"],
+  "properties": {
+    "updated_utc": { "$ref": "telemetry_v1.json#/$defs/iso8601Utc" },
+    "groups": {
+      "type": "object",
+      "required": ["meta", "zec"],
+      "properties": {
+        "meta": {
+          "type": "object",
+          "description": "Provenance of the delta figures: when sampling started and whether a full 24h window exists yet.",
+          "required": ["since", "updated", "has_24h", "delta24_ready"],
+          "properties": {
+            "since": { "type": "string" },
+            "updated": { "type": "string" },
+            "has_24h": { "type": "string", "enum": ["yes", ""] },
+            "delta24_ready": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "zec": {
+          "type": "object",
+          "description": "Shielded-pool totals plus one row (and two deltas) per pool.",
+          "required": ["state", "height", "shielded", "supply", "shielded_pct",
+                       "shielded_delta_24h", "shielded_delta_1h",
+                       "sprout", "sprout_delta", "sprout_delta_1h",
+                       "sapling", "sapling_delta", "sapling_delta_1h",
+                       "orchard", "orchard_delta", "orchard_delta_1h",
+                       "ironwood", "ironwood_delta", "ironwood_delta_1h",
+                       "lockbox", "lockbox_delta", "lockbox_delta_1h",
+                       "transparent", "transparent_delta", "transparent_delta_1h"],
+          "properties": {
+            "state": { "type": "string", "enum": ["online", "RPC unreachable"] },
+            "height": { "$ref": "telemetry_v1.json#/$defs/displayNumber" },
+            "shielded": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "supply": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "shielded_pct": { "$ref": "telemetry_v1.json#/$defs/displayPercent" },
+            "shielded_delta_24h": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "shielded_delta_1h": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "sprout": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "sapling": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "orchard": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "ironwood": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "lockbox": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "transparent": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "sprout_delta": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "sprout_delta_1h": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "sapling_delta": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "sapling_delta_1h": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "orchard_delta": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "orchard_delta_1h": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "ironwood_delta": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "ironwood_delta_1h": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "lockbox_delta": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "lockbox_delta_1h": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "transparent_delta": { "$ref": "telemetry_v1.json#/$defs/displayAmount" },
+            "transparent_delta_1h": { "$ref": "telemetry_v1.json#/$defs/displayAmount" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "histo": { "type": "array" }
+  },
+  "additionalProperties": false
+}

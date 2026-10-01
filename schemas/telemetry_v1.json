@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robotbase.cc/schemas/telemetry_v1.json",
+  "title": "RobotBase Zcash telemetry — shared definitions (v1)",
+  "description": "Shared building blocks for the public Zcash telemetry contracts. Endpoint schemas in this directory ($ref) into these definitions. Versioning: any field removal, type change, or change to the required value-pool set is a breaking change and must ship as telemetry_v2.",
+  "$comment": "This file is a definition library: it intentionally has no top-level 'type'. Validate payloads against the endpoint schemas (zec_chain_info_v1.json / zec_summary_v1.json / zec_value_pools_v1.json).",
+  "$defs": {
+    "iso8601Utc": {
+      "type": "string",
+      "description": "UTC timestamp, seconds resolution, e.g. 2026-10-01T13:09:37Z",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "displayAmount": {
+      "type": "string",
+      "description": "Human-readable amount exactly as rendered on the site: thousands separators, a unit suffix, and either an em dash (unknown/not ready) or a signed delta with U+2212 for negatives.",
+      "pattern": "^([0-9][0-9,]*|[0-9][0-9,]* [A-Z]{2,5}|[+\u2212][0-9][0-9,]* [A-Z]{2,5}|\u2014)$"
+    },
+    "displayNumber": {
+      "type": "string",
+      "description": "Human-readable integer or the em dash placeholder.",
+      "pattern": "^([0-9][0-9,]*|\u2014)$"
+    },
+    "displayPercent": {
+      "type": "string",
+      "description": "Human-readable percentage or the em dash placeholder.",
+      "pattern": "^(([0-9]+\\.[0-9]+|[0-9]+)%|\u2014)$"
+    },
+    "poolName": {
+      "type": "string",
+      "description": "The six Zcash value pools tracked by this contract (NU6.3). A new protocol pool is a new contract version.",
+      "enum": ["transparent", "sprout", "sapling", "orchard", "ironwood", "lockbox"]
+    },
+    "valuePool": {
+      "type": "object",
+      "description": "One value pool as returned by Zebra getblockchaininfo.valuePools.",
+      "required": ["chainValue", "monitored"],
+      "properties": {
+        "chainValue": {
+          "type": "number",
+          "description": "Pool balance in ZEC (decimal, as reported by the node).",
+          "minimum": 0
+        },
+        "chainValueZat": {
+          "type": "integer",
+          "description": "Pool balance in zatoshis, when the node reports it.",
+          "minimum": 0
+        },
+        "monitored": {
+          "type": "boolean",
+          "description": "Whether the node is tracking this pool."
+        }
+      },
+      "additionalProperties": false
+    },
+    "valuePools": {
+      "type": "object",
+      "description": "Exactly the six pools of this contract version, each present and monitored.",
+      "required": ["transparent", "sprout", "sapling", "orchard", "ironwood", "lockbox"],
+      "properties": {
+        "transparent": { "$ref": "#/$defs/valuePool" },
+        "sprout": { "$ref": "#/$defs/valuePool" },
+        "sapling": { "$ref": "#/$defs/valuePool" },
+        "orchard": { "$ref": "#/$defs/valuePool" },
+        "ironwood": { "$ref": "#/$defs/valuePool" },
+        "lockbox": { "$ref": "#/$defs/valuePool" }
+      },
+      "additionalProperties": false
+    },
+    "chainSupply": {
+      "type": "object",
+      "description": "Total chain supply as reported by Zebra.",
+      "required": ["chainValue", "monitored"],
+      "properties": {
+        "chainValue": { "type": "number", "minimum": 0 },
+        "chainValueZat": { "type": "integer", "minimum": 0 },
+        "monitored": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "poolTelemetry": {
+      "type": "object",
+      "description": "Pool-side counters. Shares are cumulative across engine restarts; hashrate is a trailing estimate from accepted shares, so a small CPU rig can legitimately read 0 in a quiet minute.",
+      "required": ["hashrate", "workers_online", "shares_total", "shares_rejected", "valid_rate",
+                   "difficulty", "uptime_seconds", "shares_1m"],
+      "properties": {
+        "hashrate": { "type": "number", "minimum": 0 },
+        "workers_online": { "type": "integer", "minimum": 0 },
+        "shares_total": { "type": "integer", "minimum": 0 },
+        "shares_rejected": { "type": "integer", "minimum": 0 },
+        "valid_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "difficulty": { "type": "number", "minimum": 0 },
+        "uptime_seconds": { "type": "number", "minimum": 0 },
+        "shares_1m": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "networkTelemetry": {
+      "type": "object",
+      "description": "Chain/network view as served by our own Zebra node.",
+      "required": ["height", "difficulty", "network_solps", "connections", "node_version",
+                   "block_time_target", "mempool_txs", "blocks_to_halving", "verification_progress"],
+      "properties": {
+        "height": { "type": "integer", "minimum": 0 },
+        "difficulty": { "type": "number", "minimum": 0 },
+        "network_solps": { "type": "number", "minimum": 0 },
+        "connections": { "type": "integer", "minimum": 0 },
+        "node_version": { "type": "string", "pattern": "^/Zebra:[0-9]" },
+        "block_time_target": { "type": "integer", "minimum": 1 },
+        "mempool_txs": { "type": "integer", "minimum": 0 },
+        "blocks_to_halving": { "type": "integer", "minimum": 0 },
+        "verification_progress": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "priceTelemetry": {
+      "type": "object",
+      "description": "Reference price used for display only; never used for settlement.",
+      "required": ["usd", "usd_24h_change", "source"],
+      "properties": {
+        "usd": { "type": "number", "minimum": 0 },
+        "usd_24h_change": { "type": "number" },
+        "source": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "templateTelemetry": {
+      "type": "object",
+      "description": "Live block template as the miner would receive it (values in zatoshis).",
+      "required": ["template_height", "miner_reward", "lockbox_value", "lockbox_address",
+                   "miner_payout_shielded", "txs"],
+      "properties": {
+        "template_height": { "type": "integer", "minimum": 0 },
+        "miner_reward": { "type": "integer", "minimum": 0 },
+        "lockbox_value": { "type": "integer", "minimum": 0 },
+        "lockbox_address": { "type": "string", "pattern": "^t3" },
+        "miner_payout_shielded": { "type": "boolean" },
+        "txs": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

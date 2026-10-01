@@ -9,3 +9,4 @@ status.json
 status_pushed.json
 worker_difficulty.json
 *.log
+p2pool*

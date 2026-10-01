@@ -150,6 +150,29 @@ def merkle_root(coinbase_hash: bytes, branch: list[bytes]) -> bytes:
     return root
 
 
+def merkle_branch(txids: list[bytes], index: int = 0) -> list[bytes]:
+    """Sibling path (leaf -> root) for `txids[index]`, using the same pairing rule as the tree.
+
+    `merkle_root()` above walks a *branch*; this is the function that builds one. It exists because the
+    transaction list returned by `getblocktemplate` is **not** a branch: with two or more transactions the
+    sibling of the coinbase is a subtree hash, not the next transaction. Feeding the raw transaction list
+    into `merkle_root()` (the bug fixed on 2026-10-01) produced a header that did not commit to the real
+    block's merkle root, so a solved block would have been rejected by the network.
+
+    Odd levels duplicate their last hash, exactly like `zcash_v6.merkle_root()`.
+    """
+    branch: list[bytes] = []
+    level, idx = list(txids), index
+    while len(level) > 1:
+        if len(level) % 2:
+            level.append(level[-1])
+        sibling = idx ^ 1
+        branch.append(level[sibling])
+        level = [dsha256(level[i] + level[i + 1]) for i in range(0, len(level), 2)]
+        idx //= 2
+    return branch
+
+
 def hex2bytes_reversed(h: str) -> bytes:
     """Display-order (big-endian) hex -> header internal byte order (32-byte reversal)."""
     return bytes.fromhex(h)[::-1]
@@ -343,12 +366,23 @@ class JobManager:
                 log.error("template is missing blockcommitmentshash / finalsaplingroothash")
                 return None
             txs = [t["data"] for t in tpl.get("transactions", [])]
-            branch = [hex2bytes_reversed(t["hash"]) for t in tpl.get("transactions", [])]
-
             raw = bytes.fromhex(coinbase_hex)
             coinb1 = raw      # the whole coinbase, verbatim
             coinb2 = b""      # nothing is split off
-            root = merkle_root(dsha256(raw), branch)
+            # The block's merkle root is a *tree* over [coinbase, tx1, tx2, ...]; the template's transaction
+            # list is not a branch. Two fixes are folded in here (2026-10-01):
+            #   1. the coinbase *txid* is not dsha256(raw) — for Zcash v5/v6 transactions the txid is a
+            #      ZIP-244 digest, and for shielded coinbases the raw bytes are not even fully parseable, so
+            #      take the txid Zebra already computed and published as `coinbasetxn.hash`;
+            #   2. derive the sibling path from the tree instead of treating the tx list as one.
+            cb_hash_hex = (tpl.get("coinbasetxn") or {}).get("hash")
+            if cb_hash_hex:
+                cb_txid = bytes.fromhex(cb_hash_hex)[::-1]
+            else:   # transparent-only coinbases: we can compute the txid ourselves
+                cb_txid = zv.txid_v6(zv.parse_transparent(raw))
+            txids = [cb_txid] + [hex2bytes_reversed(t["hash"]) for t in tpl.get("transactions", [])]
+            branch = merkle_branch(txids, 0)
+            root = zv.merkle_root(txids)
 
             self._seq += 1
             return Job(

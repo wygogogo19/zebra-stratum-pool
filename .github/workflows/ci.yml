@@ -14,6 +14,65 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  tests:
+    name: pytest + coverage (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # The engine runs on the standard library only; the *tests* need pytest/pytest-cov.
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      # pytest.ini wires the coverage targets and the regression gate (`--cov-fail-under`).
+      - name: Run the test suite
+        run: python -m pytest
+
+      - name: Coverage summary (job summary tab)
+        if: always()
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import pathlib, xml.etree.ElementTree as ET
+          p = pathlib.Path("coverage.xml")
+          if not p.exists():
+              print("no coverage.xml produced")
+          else:
+              root = ET.parse(p).getroot()
+              rate = float(root.get("line-rate", 0)) * 100
+              print(f"### Coverage: {rate:.1f}% of statements\n")
+              print("| module | statements | missed | coverage |")
+              print("| --- | --- | --- | --- |")
+              for cls in root.iter("class"):
+                  name = cls.get("filename")
+                  if not name.endswith(".py") or name.startswith("tests/"):
+                      continue
+                  lines = [l for l in cls.iter("line")]
+                  missed = sum(1 for l in lines if l.get("hits") == "0")
+                  total = len(lines)
+                  pct = 100.0 * (total - missed) / total if total else 0
+                  print(f"| `{name}` | {total} | {missed} | {pct:.1f}% |")
+          PY
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.python-version }}
+          path: coverage.xml
+
   checks:
     name: Syntax + import self-check (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

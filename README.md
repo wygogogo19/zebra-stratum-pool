@@ -130,9 +130,36 @@ submit shares against a coinbase the pool does not know about.
 
 ## Testing
 
-CI runs on every push: every module is byte-compiled, imported and checked for the mode-2 coinbase
-path, the shipped config template is parsed, and the tracked sources are verified to be English-only
-(Python 3.11 / 3.12 / 3.13, standard library only, no install step).
+CI runs on every push (Python 3.11 / 3.12 / 3.13): the test suite below, plus a hygiene job that
+byte-compiles and imports every module, checks the mode-2 coinbase path, parses the shipped config
+template and verifies that tracked sources are English-only.
+
+The suite runs **offline against real mainnet data** frozen in `tests/fixtures/` — a verbatim
+`getblocktemplate`/`getblocksubsidy` pair from our production node, and two shares the production pool
+accepted together with their 140-byte headers and 1344-byte Equihash(200,9) solutions. No node, no
+solver, no network access.
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest                       # the suite + the coverage gate configured in pytest.ini
+python tests/_coverage.py              # the same coverage metric without pip (stdlib only)
+python tests/_run.py                   # plain unittest run
+python -m pytest tests/test_build_coinbase.py -v      # just the 99/1 split
+```
+
+What the suite pins down:
+
+| Area | Examples |
+| --- | --- |
+| Coinbase split (`build_coinbase.py`) | subsidy/lockbox arithmetic, output order and addresses, deterministic txid/auth-digest, refusal to build when the template has no lockbox output |
+| Block roots | our merkle / auth-data / block-commitments computation reproduces the node's own `defaultroots` byte-for-byte |
+| Protocol | the 8-parameter `mining.notify` byte order, the `extranonce1 ‖ 28-byte nonce` topology, exactly one CompactSize solution prefix |
+| Share path | recorded real Equihash solutions are accepted end to end over TCP; tampered solutions and stale jobs are rejected |
+| Diligence red lines | a payout address equal to the pool fee address is refused, `local.`/`u1` rigs stay out of the public counters, and a mode-2 miner gets its own coinbase carrying the 99/1 split |
+
+`tests/synthetic_miner.py` is the harness behind the end-to-end tests: it starts the real engine against a
+stub node, speaks Stratum V1 over a socket, and can replay a recorded share, so the accept path is exercised
+with a genuine proof of work instead of a mocked validator.
 
 `pool_selftest_submit.py` connects to a running engine, subscribes, authorises and submits a share — useful to
 verify a relay/firewall path end to end:

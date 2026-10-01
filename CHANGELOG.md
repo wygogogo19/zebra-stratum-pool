@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased — 2026-10-01
+
+Test suite (ZCG milestone 2) plus the two correctness fixes it found.
+
+### Fixed
+
+- **Merkle root of node-coinbase ("mode 1") jobs.** Two defects, both silent because shares stayed
+  self-consistent while the *header* was wrong:
+  1. the coinbase txid was taken as `dsha256(raw)`. A Zcash v5/v6 txid is a ZIP-244 digest, and a shielded
+     coinbase cannot be re-derived from its raw bytes at all — the job now uses the txid the node already
+     publishes as `coinbasetxn.hash` (falling back to `txid_v6()` for transparent-only coinbases);
+  2. the block merkle root was computed by walking the template's **transaction list** as if it were a
+     merkle branch. It is a tx list: with two or more transactions the coinbase's sibling is a subtree
+     hash. The root is now built as a tree (and `merkle_branch()` derives the coinbase's sibling path).
+     Consequence before the fix: a solved block would have been rejected by the network
+     (`bad-txnmrklroot`). Verified against the live node: the fixed engine reproduces
+     `defaultroots.merkleroot` byte-for-byte; the previous algorithm did not.
+
+### Added
+
+- `tests/` — 87 tests that run offline against **real mainnet data** (a frozen `getblocktemplate` and two
+  shares the production pool accepted, including their 1344-byte Equihash solutions):
+  * `test_build_coinbase.py` — the 99/1/Lockbox split, address handling, digest regression, offline `--selftest`;
+  * `test_zcash_v6.py`, `test_pool_core.py` — transaction parsing/digests, difficulty targets, merkle tree;
+  * `test_job_contract.py` — the 8-parameter `mining.notify` byte-order contract;
+  * `test_mode2_guards.py` — payout-address validation and the "miner address must differ from the pool fee
+    address" red line, including the miner-specific coinbase layout;
+  * `test_equihash_verify.py` — the verifier accepts recorded real solutions and rejects tampered ones;
+  * `test_synthetic_miner.py` + `synthetic_miner.py` — a hashrate-free synthetic miner that drives the real
+    engine over TCP (subscribe/authorize/notify/submit) and submits a *pre-computed, genuinely valid*
+    Equihash solution; also covers stale-job rejection and the mode-2 workflow.
+- `equihash_verify.py` — the Equihash(200,9) verifier the engine optionally imports (English variant,
+  token-identical to the deployed engine).
+- `pytest.ini` / `requirements-dev.txt` — test configuration with a coverage gate; CI now runs the suite on
+  Python 3.11/3.12/3.13 and publishes a coverage table in the job summary.
+- `tests/_coverage.py` — offline statement-coverage harness for machines without pip (reports the same
+  metric as `coverage.py`; stdlib `trace` under-reports branches).
+
 ## v0.2.1 — 2026-09-28
 
 Session-liveness hardening, mirroring the engine that is running in production.

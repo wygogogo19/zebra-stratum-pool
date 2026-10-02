@@ -56,8 +56,12 @@ on Zcash should not require trusting a third party's ledger of who is owed what.
 git clone https://github.com/wygogogo19/zebra-stratum-pool.git
 cd zebra-stratum-pool
 cp config.example.json config.json     # then edit it
-python3 pool.py config.json
+ZECPOOL_CONFIG="$PWD/config.json" python3 pool.py
 ```
+
+The engine takes its config path from the **`ZECPOOL_CONFIG` environment variable** (it does not read a
+command-line argument). For a containerised deployment — node and engine together — see
+[`deploy/compose.yaml`](./deploy/compose.yaml) and [`docs/OPERATOR-RUNBOOK.md`](./docs/OPERATOR-RUNBOOK.md).
 
 Miners connect with the username format **`<your_t_address>.<worker_name>`** and any password:
 
@@ -92,6 +96,24 @@ See [`config.example.json`](./config.example.json). The important fields:
 ### Running under systemd
 
 An example unit lives in [`deploy/zebra-stratum-pool.service`](./deploy/zebra-stratum-pool.service).
+It sets `ZECPOOL_CONFIG` for you — the engine reads the config path from that variable.
+
+### Running it in containers
+
+[`Dockerfile`](./Dockerfile) builds the engine (standard-library-only, so the image installs nothing) and
+[`deploy/compose.yaml`](./deploy/compose.yaml) runs it next to a `zebrad` container, sharing the RPC
+cookie through a dedicated volume and publishing only the miner port:
+
+```bash
+cd deploy
+mkdir -p data/zebra-state data/zebra-rpc data/pool && sudo chown -R 10001:10001 data
+cp config.compose.json data/config.json      # then set mode2.pool_fee_address
+docker compose up -d
+```
+
+[`docs/OPERATOR-RUNBOOK.md`](./docs/OPERATOR-RUNBOOK.md) covers both paths end to end — sizing, the
+payout-address rules, a verification checklist you can run before trusting the pool, operations, and
+troubleshooting.
 
 ## Monitoring
 
@@ -207,7 +229,7 @@ python3 tests/_schema.py schemas/zec_summary_v1.json tests/fixtures/telemetry_ze
 - [x] Publish the integration test harness (synthetic miner over TCP, stale-job handling, mode-2 workflow)
 - [x] Stabilise the status/telemetry JSON as a documented schema ([`schemas/`](./schemas/README.md))
 - [x] Publish a miner-firmware compatibility matrix ([`docs/FIRMWARE-COMPATIBILITY.md`](./docs/FIRMWARE-COMPATIBILITY.md))
-- [ ] Publish an operator runbook and container recipe
+- [x] Publish an operator runbook and container recipe ([`docs/OPERATOR-RUNBOOK.md`](./docs/OPERATOR-RUNBOOK.md), [`deploy/compose.yaml`](./deploy/compose.yaml))
 - [ ] Reproducible deployment validated by an independent operator
 
 ## Maintainer

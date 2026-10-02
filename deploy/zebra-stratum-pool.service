@@ -1,7 +1,13 @@
 # Example systemd unit for the pool engine.
-# Adjust paths, user and config location, then: systemctl daemon-reload && systemctl enable --now zebra-stratum-pool
+#
+# Adjust the paths, user and config location, then:
+#   systemctl daemon-reload && systemctl enable --now zebra-stratum-pool
+#
+# Note the Environment= line: the engine takes its config path from ZECPOOL_CONFIG. A path passed as a
+# command-line argument is ignored, so without this line the engine would look for its built-in default
+# (/etc/zecpool/config.json) and exit with FileNotFoundError. See docs/OPERATOR-RUNBOOK.md, section 4.
 [Unit]
-Description=Zebra Stratum Pool — non-custodial solo mining on zebrad
+Description=Zebra Stratum Pool - non-custodial solo mining on zebrad
 After=network-online.target
 Wants=network-online.target
 
@@ -9,7 +15,8 @@ Wants=network-online.target
 Type=simple
 User=zecpool
 WorkingDirectory=/opt/zebra-stratum-pool
-ExecStart=/usr/bin/python3 /opt/zebra-stratum-pool/pool.py /etc/zebra-stratum-pool/config.json
+Environment=ZECPOOL_CONFIG=/etc/zebra-stratum-pool/config.json
+ExecStart=/usr/bin/python3 /opt/zebra-stratum-pool/pool.py
 Restart=always
 RestartSec=5
 

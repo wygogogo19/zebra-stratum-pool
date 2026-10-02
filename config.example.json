@@ -9,6 +9,12 @@
   "log_level": "info",
   "status_file": "/var/lib/zebra-stratum-pool/status.json",
 
+  "_heartbeat_seconds_readme": "Re-broadcast the current job after this many seconds of template silence, so an idle session survives a slow RPC moment. 0 disables it.",
+  "heartbeat_seconds": 60,
+
+  "_verify_solution_below_difficulty_readme": "Run the full Equihash(200,9) verifier on shares above the target at this difficulty. 1.0 verifies every share, which is the right setting for a solo pool: a bad share is a wasted block. 0 disables the extra check.",
+  "verify_solution_below_difficulty": 1.0,
+
   "_status_push_readme": "Optional: POST the live status snapshot to an external dashboard. Leave empty to disable.",
   "status_push_url": "",
   "status_push_token": "",

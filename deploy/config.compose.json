@@ -1,0 +1,49 @@
+{
+  "_readme": "Template for a compose deployment. Copy to data/config.json and edit the two marked values. This file is the only thing an operator must change; compose.yaml itself normally needs no edits.",
+
+  "_listen_readme": "0.0.0.0 is required in the container: the port is published by compose, not by the engine. Never expose this port without a per-IP connection limit in front of it.",
+  "listen_host": "0.0.0.0",
+  "listen_port": 3132,
+  "template_poll_seconds": 5,
+  "default_difficulty": 128,
+  "log_level": "info",
+  "status_file": "/var/lib/zebra-stratum-pool/status.json",
+
+  "_heartbeat_readme": "Seconds of template silence after which the current job is re-broadcast. Keeps sessions alive across slow RPC moments; 0 disables it.",
+  "heartbeat_seconds": 60,
+
+  "_verify_readme": "Also run the full Equihash(200,9) verifier on shares that clear the target below this difficulty. 1.0 means every share is verified — correct for a solo pool, where a bad share is a wasted block.",
+  "verify_solution_below_difficulty": 1.0,
+
+  "status_push_url": "",
+  "status_push_token": "",
+  "internal_worker_prefixes": [],
+
+  "vardiff": {
+    "enabled": true,
+    "min_difficulty": 16,
+    "max_difficulty": 131072,
+    "shares_per_min_min": 8,
+    "shares_per_min_max": 15,
+    "interval_seconds": 30,
+    "grace_seconds": 45,
+    "warmup_seconds": 45,
+    "fixed_worker_prefixes": ["local."]
+  },
+
+  "mode2": {
+    "_readme": "Non-custodial payout: the coinbase itself pays the miner. pool_fee_address MUST be a different address from any miner's, and the engine enforces that.",
+    "enabled": true,
+    "pool_fee_address": "t1REPLACE_WITH_YOUR_POOL_FEE_T_ADDRESS",
+    "fee_pct": 1.0,
+    "whitelist_prefixes": ["local."]
+  },
+
+  "zebra": {
+    "_readme": "Service name from compose.yaml, not localhost — the two containers are separate.",
+    "url": "http://zebrad:8232/",
+    "cookie_file": "/var/lib/zcash-rpc/.cookie",
+    "user": "",
+    "password": ""
+  }
+}

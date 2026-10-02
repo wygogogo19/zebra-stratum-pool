@@ -2,11 +2,22 @@
 
 ## Unreleased — 2026-10-01
 
-Test suite (ZCG milestone 2) and its two correctness fixes, plus the milestone-4 deliverables: the
-telemetry contracts and the miner-firmware compatibility matrix.
+Milestone deliverables and the correctness fixes found while building them: the test suite (ZCG milestone
+2) and its two consensus bugs, the telemetry contracts and the miner-firmware compatibility matrix
+(milestone 4), and the operator runbook plus container recipe (milestone 3).
 
 ### Fixed
 
+- **A fresh install from the documentation could not start.** Writing the operator runbook surfaced that
+  the engine reads its config path from the `ZECPOOL_CONFIG` environment variable and ignores a
+  command-line argument, while both the README quickstart (`python3 pool.py config.json`) and the shipped
+  example unit (`ExecStart=… pool.py /etc/zebra-stratum-pool/config.json`, with no `Environment=`) taught
+  the argument form. Following either would have ended in `FileNotFoundError` for the built-in default
+  path. The quickstart, the example unit and the runbook now all use the variable. The engine source is
+  deliberately unchanged so the published file stays token-identical to production; accepting an optional
+  argv path is deferred to the next engine release.
+- `config.example.json` did not document `heartbeat_seconds` or `verify_solution_below_difficulty`, both of
+  which the deployed configuration sets. Both are now present and explained in the template.
 - **Merkle root of node-coinbase ("mode 1") jobs.** Two defects, both silent because shares stayed
   self-consistent while the *header* was wrong:
   1. the coinbase txid was taken as `dsha256(raw)`. A Zcash v5/v6 txid is a ZIP-244 digest, and a shielded
@@ -58,6 +69,17 @@ telemetry contracts and the miner-firmware compatibility matrix.
   419,430 Sol/s = 99.86% of nameplate, 0 stale), which is untested, and what is deliberately unsupported —
   including the `extranonce2_size = 0` constraint and why it is a design property (the block commitments
   hash is bound to the coinbase) rather than a limitation to be patched away.
+- `docs/OPERATOR-RUNBOOK.md` — **operator runbook** (ZCG milestone 3): sizing, the payout-address rules,
+  a container path and a systemd path, a four-step verification checklist that can be run before trusting
+  the pool (live share submit, coinbase-builder regression against the operator's own node, payout
+  separation), operations, troubleshooting, and a "known rough edges" section.
+- `Dockerfile` + `.dockerignore` — the engine as a container. Standard-library-only, so the image installs
+  nothing; it runs as uid 10001 to match the uid the official `zfnd/zebra` image drops to, and its
+  healthcheck tests that the status snapshot is still being written rather than merely that a process
+  exists.
+- `deploy/compose.yaml` + `deploy/config.compose.json` — `zebrad` and the engine together, sharing the RPC
+  cookie through a dedicated volume (so the engine never sees the chain data) and publishing only the
+  miner port. The node's RPC stays on the compose network.
 - `equihash_verify.py` — the Equihash(200,9) verifier the engine optionally imports (English variant,
   token-identical to the deployed engine).
 - `pytest.ini` / `requirements-dev.txt` — test configuration with a coverage gate; CI now runs the suite on

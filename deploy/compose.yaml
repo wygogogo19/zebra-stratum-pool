@@ -1,0 +1,61 @@
+# Non-custodial Zcash solo pool: a zebrad node plus the Stratum engine from this repository.
+#
+#   cd deploy
+#   mkdir -p data/zebra-state data/zebra-rpc data/pool
+#   sudo chown -R 10001:10001 data          # both containers run as uid 10001
+#   cp config.compose.json data/config.json # then edit the payout address
+#   docker compose up -d
+#
+# Read docs/OPERATOR-RUNBOOK.md before the first start; in particular, the sync step takes days and the
+# engine intentionally refuses to mine for an address it cannot pay.
+name: zebra-stratum-pool
+
+services:
+  zebrad:
+    image: zfnd/zebra:6.3.0
+    restart: unless-stopped
+    # The image's entrypoint drops privileges to uid/gid 10001 ("zebra") and then execs this.
+    command: ["zebrad", "start"]
+    environment:
+      # zebrad's config layer gives environment variables precedence over any TOML file, and the image
+      # entrypoint sets defaults for the first two — so they are stated here explicitly rather than in a
+      # TOML file that would silently lose to them. The cookie directory is deliberately NOT the state
+      # directory: the engine only needs the cookie, so it never gets a view of the chain data.
+      ZEBRA_STATE__CACHE_DIR: /var/lib/zcash
+      ZEBRA_RPC__COOKIE_DIR: /var/lib/zcash-rpc
+      ZEBRA_RPC__LISTEN_ADDR: 0.0.0.0:8232
+      ZEBRA_RPC__ENABLE_COOKIE_AUTH: "true"
+    volumes:
+      - ./data/zebra-state:/var/lib/zcash
+      - ./data/zebra-rpc:/var/lib/zcash-rpc
+    # Peer-to-peer. Outbound connections work without this; publishing the port makes inbound
+    # connections possible too, which is what gets a fresh node well connected quickly.
+    ports:
+      - "8233:8233"
+    healthcheck:
+      test: ["CMD-SHELL", "zebrad --version >/dev/null 2>&1 || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+
+  pool:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: zebra-stratum-pool:local
+    restart: unless-stopped
+    depends_on:
+      - zebrad
+    environment:
+      ZECPOOL_CONFIG: /etc/zebra-stratum-pool/config.json
+      ZECPOOL_STATUS_FILE: /var/lib/zebra-stratum-pool/status.json
+    volumes:
+      # Edit data/config.json, not this file — it is the only thing an operator has to change.
+      - ./data/config.json:/etc/zebra-stratum-pool/config.json:ro
+      - ./data/pool:/var/lib/zebra-stratum-pool
+      - ./data/zebra-rpc:/var/lib/zcash-rpc:ro
+    # The miner-facing port. Nothing else is published: the JSON-RPC port stays on the compose network,
+    # where the engine reaches it as http://zebrad:8232/.
+    ports:
+      - "3132:3132"

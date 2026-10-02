@@ -1,0 +1,10 @@
+# The runtime image needs the engine modules and nothing else. Keeping the context narrow also makes it
+# impossible to bake a local config.json (which holds a payout address) or a stray tarball into the image.
+*
+!pool.py
+!build_coinbase.py
+!zcash_v6.py
+!equihash_verify.py
+!pool_selftest_submit.py
+!config.example.json
+!Dockerfile

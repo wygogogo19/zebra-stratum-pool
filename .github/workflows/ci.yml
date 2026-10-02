@@ -134,6 +134,14 @@ jobs:
           assert not bad, f"CJK text found in tracked files: {bad}"
           print(f"[ok] {len(tracked)} tracked files scanned, no CJK found")
 
+          # 4b) the container recipe writes chain state and the zebrad RPC cookie under deploy/data/.
+          #     If that path stops being ignored, an operator's fork would try to commit ~280 GB of state
+          #     and a live credential the first time they run `git add -A`.
+          probe = "deploy/data/zebra-rpc/.cookie"
+          if subprocess.run(["git", "check-ignore", "--no-index", "-q", probe]).returncode != 0:
+              raise AssertionError(f"{probe} is not ignored - check .gitignore and docs/OPERATOR-RUNBOOK.md")
+          print("[ok] deploy/data/ is ignored (chain state + RPC cookie stay out of git)")
+
           # 5) deployment guard: the share-counter persistence trio must survive every build,
           #    otherwise a restart silently resets the public numbers a dashboard reports.
           engine_src = pathlib.Path("pool.py").read_text(encoding="utf-8")

@@ -10,3 +10,9 @@ status_pushed.json
 worker_difficulty.json
 *.log
 p2pool*
+
+# The container recipe (deploy/compose.yaml) writes everything it produces under deploy/data/:
+# roughly 280 GB of chain state, the engine's counters and status, and the zebrad RPC cookie — a live
+# credential. None of that may ever be committed, so the whole directory is ignored rather than relying
+# on the per-filename patterns above.
+deploy/data/

@@ -8,6 +8,11 @@ Milestone deliverables and the correctness fixes found while building them: the 
 
 ### Fixed
 
+- **`deploy/data/` was not gitignored.** The new container recipe writes the node's chain state (about
+  280 GB), the engine's counters and status, and the zebrad JSON-RPC cookie into `deploy/data/`. The
+  existing `.gitignore` covered the runtime files by name but not the directory, so the first `git add -A`
+  in an operator's fork would have tried to commit the chain data and a live RPC credential. The whole
+  directory is now ignored, and the CI hygiene job asserts that it stays that way.
 - **A fresh install from the documentation could not start.** Writing the operator runbook surfaced that
   the engine reads its config path from the `ZECPOOL_CONFIG` environment variable and ignores a
   command-line argument, while both the README quickstart (`python3 pool.py config.json`) and the shipped

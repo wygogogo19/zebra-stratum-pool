@@ -18,7 +18,7 @@ python3 -m pytest                                 # the suite with the coverage 
 python3 -m pytest tests/test_build_coinbase.py -v # just the 99/1 coinbase split
 ```
 
-Current result on this repository: **107 tests, OK in ~1.3 s** (2 of them are the live-endpoint check,
+Current result on this repository: **115 tests, OK in ~2.7 s** (2 of them are the live-endpoint check,
 skipped unless you opt in — see below).
 
 ## What each file pins down
@@ -30,6 +30,7 @@ skipped unless you opt in — see below).
 | `test_telemetry_schemas.py` | 20 | the milestone-4 JSON Schema contracts: four frozen payloads validate; the validator itself is exercised against broken schemas and payloads |
 | `test_job_contract.py` | 13 | the 8-parameter `mining.notify` byte order, the `extranonce1 ‖ 28-byte nonce` topology, the merkle root committing to the real block |
 | `test_synthetic_miner.py` | 8 | a hashrate-free miner drives the **real** engine over TCP and replays a recorded, genuinely valid Equihash solution; stale-job rejection; the mode-2 workflow |
+| `test_firmware_matrix.py` | 8 | the four accepted `mining.submit` shapes (5-param, 6-param, CompactSize-prefixed solution, 28-byte Antminer nonce) and the advertised capabilities — the executable backing for [`FIRMWARE-COMPATIBILITY.md`](./FIRMWARE-COMPATIBILITY.md) |
 | `test_mode2_guards.py` | 7 | payout-address validation and the "miner address must differ from the pool fee address" red line |
 | `test_equihash_verify.py` | 6 | the verifier accepts recorded real solutions and rejects tampered ones |
 

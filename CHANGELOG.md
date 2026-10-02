@@ -2,7 +2,8 @@
 
 ## Unreleased — 2026-10-01
 
-Test suite (ZCG milestone 2) and its two correctness fixes, plus the telemetry contracts (ZCG milestone 4).
+Test suite (ZCG milestone 2) and its two correctness fixes, plus the milestone-4 deliverables: the
+telemetry contracts and the miner-firmware compatibility matrix.
 
 ### Fixed
 
@@ -20,7 +21,7 @@ Test suite (ZCG milestone 2) and its two correctness fixes, plus the telemetry c
 
 ### Added
 
-- `tests/` — 107 tests that run offline against **real mainnet data** (a frozen `getblocktemplate` and two
+- `tests/` — 115 tests that run offline against **real mainnet data** (a frozen `getblocktemplate` and two
   shares the production pool accepted, including their 1344-byte Equihash solutions):
   * `test_build_coinbase.py` — the 99/1/Lockbox split, address handling, digest regression, offline `--selftest`;
   * `test_pool_core.py` — difficulty⇄target conversion, vardiff bounds, merkle tree, coinbase decoding,
@@ -34,7 +35,12 @@ Test suite (ZCG milestone 2) and its two correctness fixes, plus the telemetry c
     engine over TCP (subscribe/authorize/notify/submit) and submits a *pre-computed, genuinely valid*
     Equihash solution; also covers stale-job rejection and the mode-2 workflow;
   * `test_telemetry_schemas.py` — the M4 telemetry contracts (below) validate four frozen live payloads,
-    and the validator itself is tested against deliberately broken schemas and payloads.
+    and the validator itself is tested against deliberately broken schemas and payloads;
+  * `test_firmware_matrix.py` — the M4 compatibility matrix below, as executable tests: the four
+    `mining.submit` shapes (5-parameter, 6-parameter, CompactSize-prefixed solution, 28-byte Antminer
+    nonce) each deliver one share the production pool once accepted, and the advertised capabilities
+    (`extranonce2_size = 0`, 8-field notify, `mining.extranonce.subscribe`, no version-rolling) are
+    asserted over a real socket.
 - `schemas/` — **telemetry contracts, v1** (ZCG milestone 4). Formal JSON Schema (draft 2020-12) for every
   public Zcash telemetry surface, with a documented versioning policy (see `schemas/README.md`):
   * `telemetry_v1.json` — shared definitions: the six value pools (`required`, `additionalProperties:false`),
@@ -47,6 +53,11 @@ Test suite (ZCG milestone 2) and its two correctness fixes, plus the telemetry c
   `python3 tests/_schema.py <schema> <payload>` CLI) so the contracts can be checked without `pip`.
 - `docs/TESTING.md` — the test inventory, the coverage table, fixture provenance, the CI gates and the
   honest limits; `docs/FORUM-UPDATE-2026-10.md` — the milestone-2 report draft for the grant thread.
+- `docs/FIRMWARE-COMPATIBILITY.md` — **miner-firmware compatibility matrix** (ZCG milestone 4). States
+  plainly which firmware has been verified against the live pool (Antminer Z15: 2,226 accepted shares,
+  419,430 Sol/s = 99.86% of nameplate, 0 stale), which is untested, and what is deliberately unsupported —
+  including the `extranonce2_size = 0` constraint and why it is a design property (the block commitments
+  hash is bound to the coinbase) rather than a limitation to be patched away.
 - `equihash_verify.py` — the Equihash(200,9) verifier the engine optionally imports (English variant,
   token-identical to the deployed engine).
 - `pytest.ini` / `requirements-dev.txt` — test configuration with a coverage gate; CI now runs the suite on

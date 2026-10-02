@@ -129,9 +129,13 @@ is assembled per miner, so the coinbase is fixed for the life of a job and the s
 from the 32-byte nonce plus `ntime`. A firmware that insists on rolling its own `extranonce2` would
 submit shares against a coinbase the pool does not know about.
 
+The full matrix — which firmware has been verified against the live pool, which is untested, and what is
+deliberately unsupported — is in [`docs/FIRMWARE-COMPATIBILITY.md`](./docs/FIRMWARE-COMPATIBILITY.md).
+Every shape it claims to accept is driven over a real socket by [`tests/test_firmware_matrix.py`](./tests/test_firmware_matrix.py).
+
 ## Testing
 
-CI runs on every push (Python 3.11 / 3.12 / 3.13): **107 tests**, plus a hygiene job that byte-compiles
+CI runs on every push (Python 3.11 / 3.12 / 3.13): **115 tests**, plus a hygiene job that byte-compiles
 and imports every module, checks the mode-2 coinbase path, parses the shipped config template and verifies
 that tracked sources are English-only. The full inventory, the coverage table and the honest limits are in
 [`docs/TESTING.md`](./docs/TESTING.md).
@@ -159,6 +163,7 @@ What the suite pins down:
 | Share path | recorded real Equihash solutions are accepted end to end over TCP; tampered solutions and stale jobs are rejected |
 | Diligence red lines | a payout address equal to the pool fee address is refused, `local.`/`u1` rigs stay out of the public counters, and a mode-2 miner gets its own coinbase carrying the 99/1 split |
 | Telemetry contracts | the published `/api`, node-status and MCP payloads validate against the JSON Schemas in [`schemas/`](./schemas/README.md), and the validator itself is tested against broken inputs |
+| Firmware matrix | the four `mining.submit` shapes (5-param, 6-param, CompactSize-prefixed solution, 28-byte Antminer nonce) all deliver one accepted production share, and the advertised capabilities match [`docs/FIRMWARE-COMPATIBILITY.md`](./docs/FIRMWARE-COMPATIBILITY.md) |
 
 `tests/synthetic_miner.py` is the harness behind the end-to-end tests: it starts the real engine against a
 stub node, speaks Stratum V1 over a socket, and can replay a recorded share, so the accept path is exercised
@@ -201,7 +206,7 @@ python3 tests/_schema.py schemas/zec_summary_v1.json tests/fixtures/telemetry_ze
 
 - [x] Publish the integration test harness (synthetic miner over TCP, stale-job handling, mode-2 workflow)
 - [x] Stabilise the status/telemetry JSON as a documented schema ([`schemas/`](./schemas/README.md))
-- [ ] Publish a miner-firmware compatibility matrix
+- [x] Publish a miner-firmware compatibility matrix ([`docs/FIRMWARE-COMPATIBILITY.md`](./docs/FIRMWARE-COMPATIBILITY.md))
 - [ ] Publish an operator runbook and container recipe
 - [ ] Reproducible deployment validated by an independent operator
 

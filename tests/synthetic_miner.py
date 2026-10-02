@@ -105,6 +105,23 @@ class StratumClient:
                    "params": [worker, job_id, ntime, nonce, solution]})
         return self.wait_for(msg_id=self._id)
 
+    def submit_params(self, params: list) -> dict:
+        """Submit an arbitrary parameter list.
+
+        Firmware disagrees on the shape of `mining.submit` — most Zcash rigs send five parameters,
+        BTC-style clients add an `extranonce2` and send six — so the compatibility tests drive both
+        through this instead of the fixed five-parameter `submit()` helper.
+        """
+        self._id += 1
+        self.send({"id": self._id, "method": "mining.submit", "params": params})
+        return self.wait_for(msg_id=self._id)
+
+    def call(self, method: str, params: list) -> dict:
+        """Send any Stratum method and return its reply (used to probe advertised capabilities)."""
+        self._id += 1
+        self.send({"id": self._id, "method": method, "params": params})
+        return self.wait_for(msg_id=self._id)
+
 
 def replay_job(record: dict, job_class=pool.Job, job_id: str | None = None):
     """Rebuild the job a recorded share was solved against, from its 140-byte header.
